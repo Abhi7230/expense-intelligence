@@ -1,0 +1,9 @@
+# Copy this file to local.properties and fill in your values.
+# local.properties is in .gitignore and will NOT be committed.
+
+# Android SDK path (Android Studio usually sets this automatically)
+sdk.dir=/path/to/your/Android/sdk
+
+# Groq AI API Key — get yours free at https://console.groq.com/keys
+GROQ_API_KEY=your_groq_api_key_here
+

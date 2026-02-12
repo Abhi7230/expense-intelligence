@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Expense Intelligence</string>
+    <string name="notification_channel_name">Expense Tracking</string>
+    <string name="notification_channel_description">Keeps the expense tracker running in the background</string>
+</resources>
