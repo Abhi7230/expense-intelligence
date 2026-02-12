@@ -13,8 +13,11 @@
         android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions" />
 
-    <!-- Step 8: Internet access for Gemini AI API calls -->
+    <!-- Internet access for AI API calls -->
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Battery optimization exemption (for setup wizard "Unrestricted" prompt) -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:allowBackup="true"

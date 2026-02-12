@@ -37,17 +37,17 @@ object TransactionParser {
     // ──────────────────────────────────────────────────────────
     // REGEX 1: AMOUNT
     // ──────────────────────────────────────────────────────────
-    // Matches:  ₹183  |  Rs.120.00  |  Rs 247  |  INR 1,460.00  |  Rs.2500
+    // Matches (currency BEFORE number):
+    //   ₹183  |  Rs.120.00  |  Rs 247  |  INR 1,460.00  |  Rs.2500
+    // Matches (currency/keyword AFTER number):
+    //   183 rupees  |  1,460.00 INR  |  200 Rs
     //
-    // Breakdown:
-    //   (?:₹|Rs\.?|INR)   → Match ₹ OR Rs OR Rs. OR INR  (non-capturing group)
-    //   \s*                → Optional space(s) between symbol and number
-    //   ([\d,]+\.?\d*)     → Capture the number: digits with optional commas and decimal
-    //
-    // The 'i' flag (IGNORE_CASE) handles "rs", "RS", "inr", "INR" etc.
+    // Two capture groups:
+    //   Group 1 = number when currency symbol is BEFORE the amount
+    //   Group 2 = number when currency keyword is AFTER the amount
     //
     private val amountRegex = Regex(
-        """(?:₹|Rs\.?|INR)\s*([\d,]+\.?\d*)""",
+        """(?:₹|Rs\.?\s?|INR)\s*([\d,]+\.?\d*)|(\d[\d,]*\.?\d*)\s*(?:₹|Rs\.?|INR|rupees?)""",
         RegexOption.IGNORE_CASE
     )
 
@@ -70,6 +70,13 @@ object TransactionParser {
     //
     private val merchantRegex = Regex(
         """(?:paid |sent |debited .+?|payment .+?)?(?:to|for)\s+(.+?)(?:\s+(?:using|via|on|through|UPI|Ref|ref|$))""",
+        RegexOption.IGNORE_CASE
+    )
+
+    // Bank SMS pattern: "for UPI txn to MERCHANT" or "UPI-MERCHANT" or "to VPA merchant@bank"
+    // This catches the last "to MERCHANT" in bank SMS messages
+    private val bankMerchantRegex = Regex(
+        """(?:txn|transaction|transfer)\s+(?:to|for)\s+([A-Za-z][\w\s@.\-]+?)(?:\s+(?:on|Ref|ref|Avl|avl|\d{2}[-/])|\s*$)""",
         RegexOption.IGNORE_CASE
     )
 
@@ -97,13 +104,31 @@ object TransactionParser {
     fun parse(text: String): ParsedTransaction {
         // --- EXTRACT AMOUNT ---
         val amountMatch = amountRegex.find(text)
-        val amount = amountMatch?.groupValues?.get(1)  // group 1 = the digits
+        // Group 1 = number when currency is BEFORE (₹183)
+        // Group 2 = number when currency is AFTER  (183 rupees)
+        val amount = if (amountMatch != null) {
+            amountMatch.groupValues[1].takeIf { it.isNotBlank() }
+                ?: amountMatch.groupValues[2].takeIf { it.isNotBlank() }
+        } else null
 
         // --- EXTRACT MERCHANT ---
         val merchantMatch = merchantRegex.find(text)
         var merchant = merchantMatch?.groupValues?.get(1)?.trim()
 
-        // If primary regex didn't find anything, try the fallback
+        // If primary regex caught "UPI txn to SWIGGY" → merchant = "UPI txn to SWIGGY"
+        // Check if it contains "txn to" and re-extract just the merchant
+        if (merchant != null && merchant.contains(Regex("""(?:txn|transaction)\s+to\s""", RegexOption.IGNORE_CASE))) {
+            val bankMatch = bankMerchantRegex.find(text)
+            if (bankMatch != null) {
+                merchant = bankMatch.groupValues[1].trim()
+            }
+        }
+
+        // If primary regex didn't find anything, try bank SMS pattern, then fallback
+        if (merchant.isNullOrBlank()) {
+            val bankMatch = bankMerchantRegex.find(text)
+            merchant = bankMatch?.groupValues?.get(1)?.trim()
+        }
         if (merchant.isNullOrBlank()) {
             val fallback = merchantFallbackRegex.find(text)
             merchant = fallback?.groupValues?.get(1)?.trim()

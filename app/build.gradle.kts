@@ -5,11 +5,13 @@ plugins {
 }
 
 // Read API key from local.properties (never committed to git)
-val localProperties = java.util.Properties().apply {
-    val file = rootProject.file("local.properties")
-    if (file.exists()) load(file.inputStream())
+import java.util.Properties
+val localProperties = Properties()
+val localPropertiesFile = rootProject.file("local.properties")
+if (localPropertiesFile.exists()) {
+    localProperties.load(localPropertiesFile.inputStream())
 }
-val groqApiKey: String = localProperties.getProperty("GROQ_API_KEY", "")
+val groqApiKey: String = localProperties.getProperty("GROQ_API_KEY") ?: ""
 
 android {
     namespace = "com.example.myapplication"

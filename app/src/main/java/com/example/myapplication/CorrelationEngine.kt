@@ -143,11 +143,16 @@ object CorrelationEngine {
             score += 50  // recognized app = big bonus
 
             // Extra points for apps where money is typically spent
-            val transactionalCategories = listOf(
-                "Food Delivery", "Transport", "Shopping", "Groceries", "Travel"
-            )
-            if (appInfo.category in transactionalCategories) {
-                score += 30
+            // "Payment App" gets a LOWER bonus (+15) because GPay/PhonePe are
+            // payment INSTRUMENTS, not the actual CAUSE of a purchase.
+            // E.g., Zomato (+30) should always outscore GPay (+15).
+            val highTransactional = listOf("Food Delivery", "Transport", "Shopping", "Groceries", "Travel")
+            val paymentInstruments = listOf("Payment App", "Finance")
+
+            if (appInfo.category in highTransactional) {
+                score += 30  // commerce apps that CAUSE spending
+            } else if (appInfo.category in paymentInstruments) {
+                score += 15  // payment instruments (GPay, PhonePe, Paytm, CRED)
             }
         }
 
@@ -163,8 +168,12 @@ object CorrelationEngine {
         // ── FACTOR 3: How close to the payment? ──
         // If the app was closed 30 seconds before payment → very likely the cause
         // If it was closed 9 minutes ago → less likely
+        // NOTE: timeBetween can be NEGATIVE if the app is STILL in the foreground
+        // (the polling thread hasn't ended the session yet). That means the user
+        // is CURRENTLY using this app — strongest possible signal!
         val timeBetween = paymentTime - usage.endTime
         score += when {
+            timeBetween <= 0 -> 25            // app STILL OPEN → strongest signal
             timeBetween < 60_000 -> 20        // within 1 min
             timeBetween < 180_000 -> 10       // within 3 min
             timeBetween < 600_000 -> 5        // within 10 min
@@ -214,8 +223,20 @@ object CorrelationEngine {
                 .any { it in combined } -> "Healthcare"
 
             listOf("movie", "cinema", "pvr", "inox", "netflix", "hotstar", "spotify",
-                "subscription")
+                "subscription", "bookmyshow", "gaana")
                 .any { it in combined } -> "Entertainment"
+
+            listOf("school", "college", "university", "tuition", "course", "udemy",
+                "coursera", "books", "education", "coaching")
+                .any { it in combined } -> "Education"
+
+            listOf("rent", "landlord", "housing", "society", "maintenance",
+                "property", "flat")
+                .any { it in combined } -> "Rent / Housing"
+
+            listOf("salon", "parlour", "spa", "gym", "fitness", "haircut",
+                "grooming", "beauty")
+                .any { it in combined } -> "Personal Care"
 
             else -> "Offline Purchase"
         }

@@ -43,6 +43,7 @@ object InsightGenerator {
         val merchant: String,
         val aiInsight: String?,
         val time: String,
+        val timestamp: Long = 0L,       // raw epoch millis — for proper sorting
         val necessity: String? = null   // "need" or "want" — from AI insight
     )
 
@@ -77,8 +78,15 @@ object InsightGenerator {
             return DailySummary(totalSpent = 0.0, categories = emptyList(), transactionCount = 0)
         }
 
-        // Group transactions by category
-        val grouped = todayTransactions.groupBy { it.category ?: "Uncategorized" }
+        // Group transactions by category — normalize bad/null categories
+        val grouped = todayTransactions.groupBy { tx ->
+            when {
+                tx.category.isNullOrBlank() -> "Other"
+                tx.category.equals("Unknown", ignoreCase = true) -> "Other"
+                tx.category.equals("Uncategorized", ignoreCase = true) -> "Other"
+                else -> tx.category
+            }
+        }
 
         val categories = grouped.map { (category, transactions) ->
             val items = transactions.map { tx ->
@@ -91,6 +99,7 @@ object InsightGenerator {
                     aiInsight = tx.aiInsight,
                     time = SimpleDateFormat("hh:mm a", Locale.getDefault())
                         .format(Date(tx.timestamp)),
+                    timestamp = tx.timestamp,
                     necessity = necessity
                 )
             }
@@ -156,6 +165,13 @@ Rules:
 Respond with ONLY a JSON object (no markdown, no backticks):
 {"insights": ["insight 1", "insight 2", "insight 3"]}
         """.trim()
+
+        // Check API key before making the call
+        val apiKey = BuildConfig.GROQ_API_KEY
+        if (apiKey.isBlank() || apiKey == "PASTE_YOUR_GROQ_KEY_HERE") {
+            Log.w(TAG, "⚠️ No Groq API key — skipping weekly insight")
+            return "AI insights unavailable. Set your GROQ_API_KEY in local.properties."
+        }
 
         return try {
             val response = callGroqForInsight(prompt)
@@ -254,6 +270,66 @@ Respond with ONLY a JSON object (no markdown, no backticks):
         return SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault()).format(Date(millis))
     }
 
+    // ═══════════════════════════════════════════════════════════════
+    // TOP APPS BY SPENDING
+    // ═══════════════════════════════════════════════════════════════
+
+    data class AppSpending(
+        val appName: String,
+        val totalSpent: Double,
+        val transactionCount: Int,
+        val category: String
+    )
+
+    /**
+     * Computes the top apps by total spending.
+     * Groups all transactions by correlatedApp, sums amounts, and sorts descending.
+     *
+     * @param dao The notification DAO to query
+     * @param limit Max number of apps to return (default 10)
+     * @return List of AppSpending sorted by total spent
+     */
+    fun getTopAppsBySpending(dao: NotificationDao, limit: Int = 10): List<AppSpending> {
+        val allTransactions = dao.getAllTransactionsWithAmount()
+
+        // Filter to only transactions that have a valid correlated app
+        // Exclude system apps (launcher, systemui) and "Unknown" entries
+        val withApp = allTransactions.filter { tx ->
+            val app = tx.correlatedApp
+            !app.isNullOrBlank() &&
+            !app.contains("launcher", ignoreCase = true) &&
+            !app.equals("Unknown", ignoreCase = true) &&
+            !app.contains("systemui", ignoreCase = true) &&
+            !app.contains("settings", ignoreCase = true)
+        }
+
+        if (withApp.isEmpty()) {
+            Log.d(TAG, "No correlated transactions found for top apps")
+            return emptyList()
+        }
+
+        // Group by correlatedApp and compute totals
+        val grouped = withApp.groupBy { it.correlatedApp!! }
+
+        val appSpendings = grouped.map { (appName, transactions) ->
+            val total = transactions.sumOf { tx ->
+                tx.amount?.replace(",", "")?.toDoubleOrNull() ?: 0.0
+            }
+            val category = transactions.firstOrNull()?.category ?: "Uncategorized"
+            AppSpending(
+                appName = appName,
+                totalSpent = total,
+                transactionCount = transactions.size,
+                category = category
+            )
+        }.sortedByDescending { it.totalSpent }
+            .take(limit)
+
+        Log.d(TAG, "Top apps: ${appSpendings.map { "${it.appName}: ₹${it.totalSpent}" }}")
+
+        return appSpendings
+    }
+
     /**
      * Infers whether a transaction is a "need" or "want" based on category/merchant.
      * This is a simple heuristic — the AI may override it if it provides necessity.
@@ -262,11 +338,19 @@ Respond with ONLY a JSON object (no markdown, no backticks):
         val cat = (category ?: "").lowercase()
         val merch = (merchant ?: "").lowercase()
         return when {
-            cat.contains("transport") || cat.contains("travel") -> "need"
+            // Needs — essential spending
+            cat.contains("transport") -> "need"
             cat.contains("grocery") || cat.contains("medicine") || cat.contains("health") -> "need"
             cat.contains("bill") || cat.contains("recharge") || cat.contains("utility") -> "need"
+            cat.contains("rent") || cat.contains("housing") -> "need"
+            cat.contains("education") -> "need"
+
+            // Wants — discretionary spending
             cat.contains("food delivery") || merch.contains("zomato") || merch.contains("swiggy") -> "want"
             cat.contains("shopping") || cat.contains("entertainment") -> "want"
+            cat.contains("personal") || cat.contains("salon") -> "want"
+            cat.contains("travel") -> "want"  // Vacations are wants, commute is need (covered by transport)
+
             else -> null
         }
     }

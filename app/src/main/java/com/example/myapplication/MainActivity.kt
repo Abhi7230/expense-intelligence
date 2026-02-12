@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.os.Process
 import android.provider.Settings
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -25,10 +26,12 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -37,8 +40,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -48,6 +53,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -83,7 +89,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             MyApplicationTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    ExpenseDashboard(modifier = Modifier.padding(innerPadding))
+                    AppRoot(modifier = Modifier.padding(innerPadding))
                 }
             }
         }
@@ -98,6 +104,39 @@ class MainActivity : ComponentActivity() {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// APP ROOT — decides: Setup Wizard or Dashboard
+// ═══════════════════════════════════════════════════════════════
+@RequiresApi(Build.VERSION_CODES.O)
+@Composable
+fun AppRoot(modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val prefs = remember {
+        context.getSharedPreferences("expense_intelligence_prefs", Context.MODE_PRIVATE)
+    }
+    var setupCompleted by remember {
+        mutableStateOf(prefs.getBoolean("setup_completed", false))
+    }
+
+    if (setupCompleted) {
+        ExpenseDashboard(
+            modifier = modifier,
+            onRerunSetup = {
+                // Allow user to re-run setup from settings
+                prefs.edit().putBoolean("setup_completed", false).apply()
+                setupCompleted = false
+            }
+        )
+    } else {
+        SetupWizard(
+            onSetupComplete = {
+                prefs.edit().putBoolean("setup_completed", true).apply()
+                setupCompleted = true
+            }
+        )
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // COLOR PALETTE
 // ═══════════════════════════════════════════════════════════════
 private val GradientStart = Color(0xFF1A1A2E)
@@ -106,6 +145,7 @@ private val GradientEnd = Color(0xFF0F3460)
 private val AccentGreen = Color(0xFF00E676)
 private val AccentPurple = Color(0xFFBB86FC)
 private val AccentRed = Color(0xFFFF5252)
+private val AccentGold = Color(0xFFFFD54F)
 private val SurfaceDark = Color(0xFF1E1E2E)
 private val SurfaceCard = Color(0xFF2A2A3E)
 private val TextPrimary = Color(0xFFECECEC)
@@ -119,12 +159,18 @@ private fun getCategoryColor(category: String): Color {
     val lower = category.lowercase()
     return when {
         lower.contains("food") -> Color(0xFFFF9800)       // Orange
-        lower.contains("transport") || lower.contains("travel") -> Color(0xFF42A5F5)  // Blue
+        lower.contains("transport") -> Color(0xFF42A5F5)   // Blue
+        lower.contains("travel") -> Color(0xFF29B6F6)      // Light Blue
         lower.contains("shopping") -> Color(0xFFEC407A)    // Pink
         lower.contains("entertainment") -> Color(0xFFAB47BC) // Purple
-        lower.contains("bill") || lower.contains("recharge") -> Color(0xFF26A69A) // Teal
+        lower.contains("bill") || lower.contains("recharge") || lower.contains("utility") -> Color(0xFF26A69A) // Teal
         lower.contains("grocery") -> Color(0xFF66BB6A)     // Green
         lower.contains("health") || lower.contains("medicine") -> Color(0xFFEF5350) // Red
+        lower.contains("finance") || lower.contains("payment") -> Color(0xFF5C6BC0) // Indigo
+        lower.contains("education") -> Color(0xFF7E57C2)   // Deep Purple
+        lower.contains("rent") || lower.contains("housing") -> Color(0xFF8D6E63) // Brown
+        lower.contains("personal") || lower.contains("salon") -> Color(0xFFE91E63) // Deep Pink
+        lower.contains("offline") -> Color(0xFF546E7A)     // Blue-grey darker
         else -> Color(0xFF78909C)                          // Blue-grey default
     }
 }
@@ -133,13 +179,28 @@ private fun getCategoryIcon(category: String): String {
     val lower = category.lowercase()
     return when {
         lower.contains("food") -> "\uD83C\uDF54"           // burger
-        lower.contains("transport") || lower.contains("travel") -> "\uD83D\uDE95" // taxi
+        lower.contains("transport") -> "\uD83D\uDE95"      // taxi
+        lower.contains("travel") -> "\u2708\uFE0F"         // airplane
         lower.contains("shopping") -> "\uD83D\uDED2"       // cart
         lower.contains("entertainment") -> "\uD83C\uDFAC"  // clapper
-        lower.contains("bill") || lower.contains("recharge") -> "\uD83D\uDCB3" // card
+        lower.contains("bill") || lower.contains("recharge") || lower.contains("utility") -> "\uD83D\uDCB3" // card
         lower.contains("grocery") -> "\uD83E\uDD66"        // broccoli
         lower.contains("health") || lower.contains("medicine") -> "\uD83D\uDC8A" // pill
+        lower.contains("finance") || lower.contains("payment") -> "\uD83C\uDFE6" // bank
+        lower.contains("education") -> "\uD83D\uDCDA"      // books
+        lower.contains("rent") || lower.contains("housing") -> "\uD83C\uDFE0" // house
+        lower.contains("personal") || lower.contains("salon") -> "\uD83D\uDC87" // haircut
+        lower.contains("offline") -> "\uD83C\uDFEA"        // convenience store
         else -> "\uD83D\uDCB0"                             // money bag
+    }
+}
+
+private fun getRankEmoji(rank: Int): String {
+    return when (rank) {
+        0 -> "\uD83E\uDD47"  // gold medal
+        1 -> "\uD83E\uDD48"  // silver medal
+        2 -> "\uD83E\uDD49"  // bronze medal
+        else -> "${rank + 1}."
     }
 }
 
@@ -148,23 +209,48 @@ private fun getCategoryIcon(category: String): String {
 // ═══════════════════════════════════════════════════════════════
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
-fun ExpenseDashboard(modifier: Modifier = Modifier) {
+fun ExpenseDashboard(modifier: Modifier = Modifier, onRerunSetup: () -> Unit = {}) {
     val context = LocalContext.current
 
     var dailySummary by remember { mutableStateOf<InsightGenerator.DailySummary?>(null) }
     var weeklyInsight by remember { mutableStateOf<String?>(null) }
+    var topApps by remember { mutableStateOf<List<InsightGenerator.AppSpending>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }
     var isWeeklyLoading by remember { mutableStateOf(false) }
     var settingsExpanded by remember { mutableStateOf(false) }
+    var privacyExpanded by remember { mutableStateOf(false) }
 
-    // ── Auto-load daily summary on first open ──
+    // ── Auto-load daily summary + top apps on first open ──
+    // Also re-correlates old "Unknown" / "launcher" entries using text-based guessing
     LaunchedEffect(Unit) {
         isLoading = true
         thread {
             try {
                 val db = AppDatabase.getDatabase(context)
+
+                // ── CLEANUP: Fix old badly-correlated transactions ──
+                val badEntries = db.notificationDao().getBadlyCorrelatedTransactions()
+                if (badEntries.isNotEmpty()) {
+                    Log.d("DASHBOARD", "🧹 Cleaning up ${badEntries.size} badly-correlated entries...")
+                    for (tx in badEntries) {
+                        // Re-run correlation using text-based fallback
+                        val windowStart = tx.timestamp - (10 * 60 * 1000L)
+                        val recentUsages = db.appUsageDao().getUsageInWindow(windowStart, tx.timestamp)
+                        val result = CorrelationEngine.correlate(tx, recentUsages)
+                        db.notificationDao().updateCorrelation(
+                            id = tx.id,
+                            category = result.category,
+                            correlatedApp = result.correlatedApp,
+                            confidence = result.confidence
+                        )
+                        Log.d("DASHBOARD", "  Fixed #${tx.id}: ${result.category} (was: ${tx.category})")
+                    }
+                }
+
                 val summary = InsightGenerator.generateDailySummary(db.notificationDao())
+                val apps = InsightGenerator.getTopAppsBySpending(db.notificationDao())
                 dailySummary = summary
+                topApps = apps
             } catch (_: Exception) {}
             isLoading = false
         }
@@ -176,7 +262,7 @@ fun ExpenseDashboard(modifier: Modifier = Modifier) {
             .background(SurfaceDark),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // ── SECTION 1: Gradient Header ──
+        // ── SECTION 1: Gradient Header with Logo ──
         item {
             GradientHeader()
         }
@@ -186,11 +272,21 @@ fun ExpenseDashboard(modifier: Modifier = Modifier) {
             CollapsibleSettingsCard(
                 context = context,
                 isExpanded = settingsExpanded,
-                onToggle = { settingsExpanded = !settingsExpanded }
+                onToggle = { settingsExpanded = !settingsExpanded },
+                onRerunSetup = onRerunSetup
             )
         }
 
-        // ── SECTION 3: Refresh Button ──
+        // ── SECTION 3: Privacy & Data (collapsible) ──
+        item {
+            CollapsiblePrivacyCard(
+                isExpanded = privacyExpanded,
+                onToggle = { privacyExpanded = !privacyExpanded },
+                context = context
+            )
+        }
+
+        // ── SECTION 4: Refresh Button ──
         item {
             Button(
                 onClick = {
@@ -198,7 +294,9 @@ fun ExpenseDashboard(modifier: Modifier = Modifier) {
                     thread {
                         val db = AppDatabase.getDatabase(context)
                         val summary = InsightGenerator.generateDailySummary(db.notificationDao())
+                        val apps = InsightGenerator.getTopAppsBySpending(db.notificationDao())
                         dailySummary = summary
+                        topApps = apps
                         isLoading = false
                     }
                 },
@@ -228,7 +326,7 @@ fun ExpenseDashboard(modifier: Modifier = Modifier) {
             }
         }
 
-        // ── SECTION 4: Daily Summary Card (animated) ──
+        // ── SECTION 5: Daily Summary Card (animated) ──
         item {
             AnimatedVisibility(
                 visible = dailySummary != null,
@@ -240,14 +338,21 @@ fun ExpenseDashboard(modifier: Modifier = Modifier) {
             }
         }
 
-        // ── SECTION 5: Spend Bar ──
+        // ── SECTION 6: Spend Bar ──
         if (dailySummary != null && dailySummary!!.categories.isNotEmpty()) {
             item {
                 SpendProportionBar(dailySummary!!)
             }
         }
 
-        // ── SECTION 6: Transaction List ──
+        // ── SECTION 7: Top Apps by Spending ──
+        if (topApps.isNotEmpty()) {
+            item {
+                TopAppsBySpendingCard(topApps)
+            }
+        }
+
+        // ── SECTION 8: Transaction List ──
         if (dailySummary != null && dailySummary!!.categories.isNotEmpty()) {
             item {
                 Text(
@@ -261,21 +366,21 @@ fun ExpenseDashboard(modifier: Modifier = Modifier) {
 
             val allItems = dailySummary!!.categories.flatMap { cat ->
                 cat.items.map { item -> cat.category to item }
-            }
+            }.sortedByDescending { it.second.timestamp }  // newest first
 
             items(allItems) { (category, item) ->
                 TransactionCard(category, item)
             }
         }
 
-        // ── SECTION 7: Empty state ──
+        // ── SECTION 9: Empty state ──
         if (dailySummary != null && dailySummary!!.transactionCount == 0 && !isLoading) {
             item {
                 EmptyStateCard()
             }
         }
 
-        // ── SECTION 8: Weekly Insight Button + Result ──
+        // ── SECTION 10: Weekly Insight Button + Result ──
         item {
             Spacer(modifier = Modifier.height(4.dp))
             Button(
@@ -331,7 +436,7 @@ fun ExpenseDashboard(modifier: Modifier = Modifier) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// GRADIENT HEADER — app title, date, status
+// GRADIENT HEADER — with app logo, date, status
 // ═══════════════════════════════════════════════════════════════
 @Composable
 fun GradientHeader() {
@@ -362,18 +467,42 @@ fun GradientHeader() {
             .padding(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 24.dp)
     ) {
         Column {
-            Text(
-                text = "\uD83D\uDCB0 Expense Intelligence",
-                fontSize = 26.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.White
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = today,
-                fontSize = 14.sp,
-                color = Color.White.copy(alpha = 0.7f)
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // App Logo
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(
+                                    AccentGreen.copy(alpha = 0.3f),
+                                    Color(0xFF0F3460)
+                                )
+                            )
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "\uD83D\uDCB0",
+                        fontSize = 22.sp
+                    )
+                }
+                Spacer(modifier = Modifier.width(14.dp))
+                Column {
+                    Text(
+                        text = "Expense Intelligence",
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                    Text(
+                        text = today,
+                        fontSize = 13.sp,
+                        color = Color.White.copy(alpha = 0.6f)
+                    )
+                }
+            }
             Spacer(modifier = Modifier.height(12.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
@@ -399,8 +528,14 @@ fun GradientHeader() {
 // ═══════════════════════════════════════════════════════════════
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
-fun CollapsibleSettingsCard(context: Context, isExpanded: Boolean, onToggle: () -> Unit) {
+fun CollapsibleSettingsCard(
+    context: Context,
+    isExpanded: Boolean,
+    onToggle: () -> Unit,
+    onRerunSetup: () -> Unit = {}
+) {
     val hasUsage = hasUsageStatsPermission(context)
+    val hasNotifListener = isNotificationListenerEnabled(context)
 
     Card(
         modifier = Modifier
@@ -438,19 +573,38 @@ fun CollapsibleSettingsCard(context: Context, isExpanded: Boolean, onToggle: () 
 
             // Permission status summary (always visible)
             Spacer(modifier = Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(8.dp)
-                        .clip(CircleShape)
-                        .background(if (hasUsage) AccentGreen else AccentRed)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = if (hasUsage) "Usage Access granted" else "Usage Access needed",
-                    fontSize = 13.sp,
-                    color = if (hasUsage) AccentGreen.copy(alpha = 0.8f) else AccentRed.copy(alpha = 0.8f)
-                )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(if (hasNotifListener) AccentGreen else AccentRed)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (hasNotifListener) "Notifications" else "Notif. needed",
+                        fontSize = 12.sp,
+                        color = if (hasNotifListener) AccentGreen.copy(alpha = 0.8f) else AccentRed.copy(alpha = 0.8f)
+                    )
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(if (hasUsage) AccentGreen else AccentRed)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (hasUsage) "Usage Access" else "Usage needed",
+                        fontSize = 12.sp,
+                        color = if (hasUsage) AccentGreen.copy(alpha = 0.8f) else AccentRed.copy(alpha = 0.8f)
+                    )
+                }
             }
 
             // Expandable content
@@ -475,8 +629,8 @@ fun CollapsibleSettingsCard(context: Context, isExpanded: Boolean, onToggle: () 
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Button(
                             onClick = {
-            val intent = Intent(context, MyForegroundService::class.java)
-            context.startForegroundService(intent)
+                                val intent = Intent(context, MyForegroundService::class.java)
+                                context.startForegroundService(intent)
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = AccentGreen.copy(alpha = 0.2f)),
                             shape = RoundedCornerShape(10.dp)
@@ -495,9 +649,22 @@ fun CollapsibleSettingsCard(context: Context, isExpanded: Boolean, onToggle: () 
                         }
                     }
 
-                    // Permission grant button
+                    // Permission grant buttons
+                    if (!hasNotifListener) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        OutlinedButton(
+                            onClick = {
+                                context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Grant Notification Access", color = AccentPurple)
+                        }
+                    }
+
                     if (!hasUsage) {
-                        Spacer(modifier = Modifier.height(16.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
                         OutlinedButton(
                             onClick = {
                                 context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
@@ -509,8 +676,8 @@ fun CollapsibleSettingsCard(context: Context, isExpanded: Boolean, onToggle: () 
                         }
                     }
 
-                    // Notification listener hint
-                    Spacer(modifier = Modifier.height(12.dp))
+                    // Notification listener hint (always shown)
+                    Spacer(modifier = Modifier.height(8.dp))
                     OutlinedButton(
                         onClick = {
                             context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
@@ -520,8 +687,293 @@ fun CollapsibleSettingsCard(context: Context, isExpanded: Boolean, onToggle: () 
                     ) {
                         Text("Notification Listener Settings", color = AccentPurple)
                     }
+
+                    // Re-run Setup button
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedButton(
+                        onClick = onRerunSetup,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("\uD83D\uDD04  Re-run Setup Wizard", color = TextMuted)
+                    }
                 }
             }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// COLLAPSIBLE PRIVACY & DATA CARD
+// ═══════════════════════════════════════════════════════════════
+@Composable
+fun CollapsiblePrivacyCard(isExpanded: Boolean, onToggle: () -> Unit, context: Context) {
+    var showDeleteDialog by remember { mutableStateOf(false) }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .clickable { onToggle() },
+        colors = CardDefaults.cardColors(containerColor = SurfaceCard),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(text = "\uD83D\uDEE1\uFE0F", fontSize = 18.sp)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        "Privacy & Data",
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 16.sp,
+                        color = TextPrimary
+                    )
+                }
+                Text(
+                    text = if (isExpanded) "\u25B2" else "\u25BC",
+                    fontSize = 12.sp,
+                    color = TextMuted
+                )
+            }
+
+            // Quick summary (always visible)
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "\uD83D\uDD12 All data stored locally • No cloud • No tracking",
+                fontSize = 12.sp,
+                color = AccentGreen.copy(alpha = 0.7f)
+            )
+
+            // Expandable content
+            AnimatedVisibility(
+                visible = isExpanded,
+                enter = expandVertically(tween(300)) + fadeIn(tween(300)),
+                exit = shrinkVertically(tween(300)) + fadeOut(tween(200))
+            ) {
+                Column {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    HorizontalDivider(color = TextMuted.copy(alpha = 0.3f))
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Full privacy disclaimer
+                    PrivacyDisclaimerCard()
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Delete All Data button
+                    Button(
+                        onClick = { showDeleteDialog = true },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = AccentRed.copy(alpha = 0.15f)
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            "\uD83D\uDDD1\uFE0F  Delete All My Data",
+                            color = AccentRed,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 14.sp
+                        )
+                    }
+                    Text(
+                        text = "This permanently erases all stored transactions and usage data.",
+                        fontSize = 11.sp,
+                        color = TextMuted,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 6.dp)
+                    )
+                }
+            }
+        }
+    }
+
+    // Delete confirmation dialog
+    if (showDeleteDialog) {
+        DeleteConfirmationDialog(
+            onConfirm = {
+                showDeleteDialog = false
+                thread {
+                    try {
+                        val db = AppDatabase.getDatabase(context)
+                        db.clearAllTables()
+                    } catch (_: Exception) {}
+                }
+                Toast.makeText(context, "All data deleted!", Toast.LENGTH_SHORT).show()
+            },
+            onDismiss = { showDeleteDialog = false }
+        )
+    }
+}
+
+@Composable
+fun DeleteConfirmationDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = SurfaceCard,
+        title = {
+            Text(
+                "\u26A0\uFE0F Delete All Data?",
+                color = AccentRed,
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Text(
+                "This will permanently delete ALL your stored transactions, app usage data, AI insights, and weekly summaries. This action cannot be undone.",
+                color = TextSecondary,
+                lineHeight = 20.sp
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                colors = ButtonDefaults.buttonColors(containerColor = AccentRed)
+            ) {
+                Text("Delete Everything", color = Color.White, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = TextMuted)
+            }
+        }
+    )
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TOP APPS BY SPENDING — ranked list card
+// ═══════════════════════════════════════════════════════════════
+@Composable
+fun TopAppsBySpendingCard(topApps: List<InsightGenerator.AppSpending>) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+        shape = RoundedCornerShape(20.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    Brush.horizontalGradient(
+                        colors = listOf(Color(0xFF1A237E), Color(0xFF283593), Color(0xFF3949AB))
+                    ),
+                    shape = RoundedCornerShape(20.dp)
+                )
+        ) {
+            Column(modifier = Modifier.padding(20.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(text = "\uD83C\uDFC6", fontSize = 22.sp)
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            text = "Top Spending Apps",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                        Text(
+                            text = "All-time spending by app",
+                            fontSize = 12.sp,
+                            color = Color.White.copy(alpha = 0.6f)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Find max for proportion bar
+                val maxSpent = topApps.maxOfOrNull { it.totalSpent } ?: 1.0
+
+                topApps.forEachIndexed { index, app ->
+                    TopAppRow(
+                        rank = index,
+                        app = app,
+                        maxSpent = maxSpent
+                    )
+                    if (index < topApps.size - 1) {
+                        HorizontalDivider(
+                            modifier = Modifier.padding(vertical = 8.dp),
+                            color = Color.White.copy(alpha = 0.1f)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TopAppRow(rank: Int, app: InsightGenerator.AppSpending, maxSpent: Double) {
+    val catColor = getCategoryColor(app.category)
+    val catIcon = getCategoryIcon(app.category)
+    val proportion = (app.totalSpent / maxSpent).toFloat().coerceIn(0.05f, 1f)
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(
+                    text = getRankEmoji(rank),
+                    fontSize = if (rank < 3) 20.sp else 14.sp,
+                    modifier = Modifier.width(32.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(text = catIcon, fontSize = 18.sp)
+                Spacer(modifier = Modifier.width(8.dp))
+                Column {
+                    Text(
+                        text = app.appName,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White
+                    )
+                    Text(
+                        text = "${app.transactionCount} transaction${if (app.transactionCount > 1) "s" else ""} • ${app.category}",
+                        fontSize = 11.sp,
+                        color = Color.White.copy(alpha = 0.5f)
+                    )
+                }
+            }
+            Text(
+                text = "\u20B9${String.format("%.0f", app.totalSpent)}",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (rank == 0) AccentGold else Color.White
+            )
+        }
+
+        // Mini proportion bar
+        Spacer(modifier = Modifier.height(6.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 40.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(proportion)
+                    .height(3.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(catColor.copy(alpha = 0.7f))
+            )
         }
     }
 }
@@ -581,7 +1033,6 @@ fun DailySummaryCard(summary: InsightGenerator.DailySummary) {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                // Colored dot
                                 Box(
                                     modifier = Modifier
                                         .size(10.dp)
@@ -655,26 +1106,32 @@ fun SpendProportionBar(summary: InsightGenerator.DailySummary) {
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Legend
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                summary.categories.forEach { cat ->
-                    val pct = ((cat.total / summary.totalSpent) * 100).toInt()
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(getCategoryColor(cat.category))
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = "${cat.category.take(8)} $pct%",
-                            fontSize = 11.sp,
-                            color = TextMuted
-                        )
+            // Legend — wraps to next line if too many categories
+            // Using Column with Row chunks to prevent horizontal overflow
+            val legendChunks = summary.categories.chunked(3) // 3 items per row
+            legendChunks.forEach { chunk ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    chunk.forEach { cat ->
+                        val pct = ((cat.total / summary.totalSpent) * 100).toInt()
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(getCategoryColor(cat.category))
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "${cat.category.take(10)} $pct%",
+                                fontSize = 11.sp,
+                                color = TextMuted
+                            )
+                        }
                     }
                 }
             }
@@ -697,12 +1154,15 @@ fun TransactionCard(category: String, item: InsightGenerator.TransactionItem) {
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         shape = RoundedCornerShape(14.dp)
     ) {
-        Row(modifier = Modifier.fillMaxWidth()) {
-            // Colored left bar
+        Row(modifier = Modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min)  // Allows fillMaxHeight on children
+        ) {
+            // Colored left bar — stretches to match the content height
             Box(
                 modifier = Modifier
                     .width(5.dp)
-                    .height(110.dp)
+                    .fillMaxHeight()
                     .background(
                         catColor,
                         shape = RoundedCornerShape(topStart = 14.dp, bottomStart = 14.dp)
