@@ -13,6 +13,10 @@ if (localPropertiesFile.exists()) {
 }
 val groqApiKey: String = localProperties.getProperty("GROQ_API_KEY") ?: ""
 
+// Splitwise OAuth credentials (for expense splitting feature)
+val splitwiseClientId: String = localProperties.getProperty("SPLITWISE_CLIENT_ID") ?: ""
+val splitwiseClientSecret: String = localProperties.getProperty("SPLITWISE_CLIENT_SECRET") ?: ""
+
 android {
     namespace = "com.example.myapplication"
     compileSdk {
@@ -28,8 +32,10 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // Inject API key as a BuildConfig field (accessible at runtime, NOT in source code)
+        // Inject API keys as BuildConfig fields (accessible at runtime, NOT in source code)
         buildConfigField("String", "GROQ_API_KEY", "\"${groqApiKey}\"")
+        buildConfigField("String", "SPLITWISE_CLIENT_ID", "\"${splitwiseClientId}\"")
+        buildConfigField("String", "SPLITWISE_CLIENT_SECRET", "\"${splitwiseClientSecret}\"")
     }
 
     buildTypes {

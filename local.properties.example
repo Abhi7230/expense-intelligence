@@ -7,3 +7,9 @@ sdk.dir=/path/to/your/Android/sdk
 # Groq AI API Key — get yours free at https://console.groq.com/keys
 GROQ_API_KEY=your_groq_api_key_here
 
+# Splitwise OAuth Credentials (OPTIONAL - for expense splitting feature)
+# Get yours at https://secure.splitwise.com/apps
+# Set callback URL to: expenseintel://splitwise/callback
+SPLITWISE_CLIENT_ID=your_splitwise_client_id_here
+SPLITWISE_CLIENT_SECRET=your_splitwise_client_secret_here
+

@@ -58,6 +58,41 @@ object InsightGenerator {
     )
 
     /**
+     * Time period filter options
+     */
+    enum class TimePeriod {
+        TODAY, THIS_WEEK, THIS_MONTH, ALL
+    }
+
+    /**
+     * Generates spending summary for a specific time period.
+     */
+    fun generateSummaryForPeriod(dao: NotificationDao, period: TimePeriod): DailySummary {
+        val startTime = when (period) {
+            TimePeriod.TODAY -> getStartOfDay()
+            TimePeriod.THIS_WEEK -> getStartOfWeek()
+            TimePeriod.THIS_MONTH -> getStartOfMonth()
+            TimePeriod.ALL -> 0L  // All time
+        }
+        
+        Log.d(TAG, "Generating summary for $period from ${if (startTime == 0L) "all time" else formatTime(startTime)}")
+        
+        val transactions = if (startTime == 0L) {
+            dao.getAllTransactionsWithAmount()
+        } else {
+            dao.getTransactionsSince(startTime)
+        }
+        
+        Log.d(TAG, "Found ${transactions.size} transactions for $period")
+        
+        if (transactions.isEmpty()) {
+            return DailySummary(totalSpent = 0.0, categories = emptyList(), transactionCount = 0)
+        }
+        
+        return buildSummaryFromTransactions(transactions)
+    }
+
+    /**
      * Generates today's spending summary.
      *
      * ALGORITHM:
@@ -268,8 +303,56 @@ Respond with ONLY a JSON object (no markdown, no backticks):
         return cal.timeInMillis
     }
 
+    // ── Helper: Get start of this month ──
+    private fun getStartOfMonth(): Long {
+        val cal = Calendar.getInstance()
+        cal.set(Calendar.DAY_OF_MONTH, 1)
+        cal.set(Calendar.HOUR_OF_DAY, 0)
+        cal.set(Calendar.MINUTE, 0)
+        cal.set(Calendar.SECOND, 0)
+        cal.set(Calendar.MILLISECOND, 0)
+        return cal.timeInMillis
+    }
+
     private fun formatTime(millis: Long): String {
         return SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault()).format(Date(millis))
+    }
+
+    /**
+     * Helper: Build summary from a list of transactions
+     */
+    private fun buildSummaryFromTransactions(transactions: List<NotificationEntity>): DailySummary {
+        // Group by category
+        val byCategory = transactions.groupBy { it.category ?: "Other" }
+
+        val categoryBreakdowns = byCategory.map { (cat, txList) ->
+            val total = txList.sumOf { tx ->
+                tx.amount?.replace(",", "")?.toDoubleOrNull() ?: 0.0
+            }
+
+            val items = txList.mapNotNull { tx ->
+                val amt = tx.amount?.replace(",", "")?.toDoubleOrNull() ?: return@mapNotNull null
+                TransactionItem(
+                    dbId = tx.id,
+                    amount = amt,
+                    merchant = tx.merchant ?: "Unknown",
+                    aiInsight = tx.aiInsight,
+                    time = SimpleDateFormat("hh:mm a", Locale.getDefault()).format(Date(tx.timestamp)),
+                    timestamp = tx.timestamp,
+                    necessity = null  // Necessity is parsed from AI insight, not stored in DB
+                )
+            }
+
+            CategoryBreakdown(category = cat, total = total, items = items)
+        }.sortedByDescending { it.total }
+
+        val totalSpent = categoryBreakdowns.sumOf { it.total }
+
+        return DailySummary(
+            totalSpent = totalSpent,
+            categories = categoryBreakdowns,
+            transactionCount = transactions.size
+        )
     }
 
     // ═══════════════════════════════════════════════════════════════

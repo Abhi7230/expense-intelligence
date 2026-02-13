@@ -72,7 +72,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.myapplication.ui.theme.MyApplicationTheme
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -85,11 +88,38 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Log.d(TAG, "onCreate Called")
+
+        // Handle Splitwise OAuth callback
+        handleSplitwiseCallback(intent)
+
         enableEdgeToEdge()
         setContent {
             MyApplicationTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     AppRoot(modifier = Modifier.padding(innerPadding))
+                }
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleSplitwiseCallback(intent)
+    }
+
+    private fun handleSplitwiseCallback(intent: Intent?) {
+        val uri = intent?.data ?: return
+        if (uri.scheme == "expenseintel" && uri.host == "splitwise") {
+            val code = uri.getQueryParameter("code")
+            if (code != null) {
+                Log.d(TAG, "🔗 Splitwise OAuth callback received")
+                CoroutineScope(Dispatchers.Main).launch {
+                    val success = SplitwiseManager.handleCallback(this@MainActivity, code)
+                    Toast.makeText(
+                        this@MainActivity,
+                        if (success) "✅ Connected to Splitwise!" else "❌ Splitwise login failed",
+                        Toast.LENGTH_SHORT
+                    ).show()
                 }
             }
         }
@@ -207,6 +237,7 @@ private fun getRankEmoji(rank: Int): String {
 // ═══════════════════════════════════════════════════════════════
 // MAIN DASHBOARD
 // ═══════════════════════════════════════════════════════════════
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @RequiresApi(Build.VERSION_CODES.O)
 @Composable
 fun ExpenseDashboard(modifier: Modifier = Modifier, onRerunSetup: () -> Unit = {}) {
@@ -219,41 +250,55 @@ fun ExpenseDashboard(modifier: Modifier = Modifier, onRerunSetup: () -> Unit = {
     var isWeeklyLoading by remember { mutableStateOf(false) }
     var settingsExpanded by remember { mutableStateOf(false) }
     var privacyExpanded by remember { mutableStateOf(false) }
+    
+    // ── Time Period Filter ──
+    var selectedPeriod by remember { mutableStateOf(InsightGenerator.TimePeriod.TODAY) }
 
-    // ── Auto-load daily summary + top apps on first open ──
-    // Also re-correlates old "Unknown" / "launcher" entries using text-based guessing
-    LaunchedEffect(Unit) {
+    // ── Splitwise bottom sheet state ──
+    var showSplitSheet by remember { mutableStateOf(false) }
+    var splitAmount by remember { mutableStateOf(0.0) }
+    var splitMerchant by remember { mutableStateOf("") }
+    var splitDescription by remember { mutableStateOf("") }
+
+    // ── Load data based on selected time period ──
+    fun loadDataForPeriod(period: InsightGenerator.TimePeriod) {
         isLoading = true
         thread {
             try {
                 val db = AppDatabase.getDatabase(context)
 
-                // ── CLEANUP: Fix old badly-correlated transactions ──
-                val badEntries = db.notificationDao().getBadlyCorrelatedTransactions()
-                if (badEntries.isNotEmpty()) {
-                    Log.d("DASHBOARD", "🧹 Cleaning up ${badEntries.size} badly-correlated entries...")
-                    for (tx in badEntries) {
-                        // Re-run correlation using text-based fallback
-                        val windowStart = tx.timestamp - (10 * 60 * 1000L)
-                        val recentUsages = db.appUsageDao().getUsageInWindow(windowStart, tx.timestamp)
-                        val result = CorrelationEngine.correlate(tx, recentUsages)
-                        db.notificationDao().updateCorrelation(
-                            id = tx.id,
-                            category = result.category,
-                            correlatedApp = result.correlatedApp,
-                            confidence = result.confidence
-                        )
-                        Log.d("DASHBOARD", "  Fixed #${tx.id}: ${result.category} (was: ${tx.category})")
+                // ── CLEANUP: Fix old badly-correlated transactions (only on first load) ──
+                if (period == InsightGenerator.TimePeriod.TODAY) {
+                    val badEntries = db.notificationDao().getBadlyCorrelatedTransactions()
+                    if (badEntries.isNotEmpty()) {
+                        Log.d("DASHBOARD", "🧹 Cleaning up ${badEntries.size} badly-correlated entries...")
+                        for (tx in badEntries) {
+                            val windowStart = tx.timestamp - (10 * 60 * 1000L)
+                            val recentUsages = db.appUsageDao().getUsageInWindow(windowStart, tx.timestamp)
+                            val result = CorrelationEngine.correlate(tx, recentUsages)
+                            db.notificationDao().updateCorrelation(
+                                id = tx.id,
+                                category = result.category,
+                                correlatedApp = result.correlatedApp,
+                                confidence = result.confidence
+                            )
+                            Log.d("DASHBOARD", "  Fixed #${tx.id}: ${result.category} (was: ${tx.category})")
+                        }
                     }
                 }
 
-                val summary = InsightGenerator.generateDailySummary(db.notificationDao())
+                val summary = InsightGenerator.generateSummaryForPeriod(db.notificationDao(), period)
                 val apps = InsightGenerator.getTopAppsBySpending(db.notificationDao())
                 dailySummary = summary
                 topApps = apps
             } catch (_: Exception) {}
             isLoading = false
         }
+    }
+
+    // ── Auto-load on first open and when period changes ──
+    LaunchedEffect(selectedPeriod) {
+        loadDataForPeriod(selectedPeriod)
     }
 
     LazyColumn(
@@ -265,6 +310,16 @@ fun ExpenseDashboard(modifier: Modifier = Modifier, onRerunSetup: () -> Unit = {
         // ── SECTION 1: Gradient Header with Logo ──
         item {
             GradientHeader()
+        }
+
+        // ── SECTION 1.5: Time Period Filter Chips ──
+        item {
+            TimePeriodFilterRow(
+                selectedPeriod = selectedPeriod,
+                onPeriodSelected = { period ->
+                    selectedPeriod = period
+                }
+            )
         }
 
         // ── SECTION 2: Collapsible Settings ──
@@ -290,15 +345,7 @@ fun ExpenseDashboard(modifier: Modifier = Modifier, onRerunSetup: () -> Unit = {
         item {
             Button(
                 onClick = {
-                    isLoading = true
-                    thread {
-                        val db = AppDatabase.getDatabase(context)
-                        val summary = InsightGenerator.generateDailySummary(db.notificationDao())
-                        val apps = InsightGenerator.getTopAppsBySpending(db.notificationDao())
-                        dailySummary = summary
-                        topApps = apps
-                        isLoading = false
-                    }
+                    loadDataForPeriod(selectedPeriod)
                 },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -316,8 +363,14 @@ fun ExpenseDashboard(modifier: Modifier = Modifier, onRerunSetup: () -> Unit = {
                     Spacer(modifier = Modifier.width(12.dp))
                     Text("Loading...", color = AccentGreen, fontWeight = FontWeight.SemiBold)
                 } else {
+                    val periodLabel = when (selectedPeriod) {
+                        InsightGenerator.TimePeriod.TODAY -> "Today"
+                        InsightGenerator.TimePeriod.THIS_WEEK -> "This Week"
+                        InsightGenerator.TimePeriod.THIS_MONTH -> "This Month"
+                        InsightGenerator.TimePeriod.ALL -> "All Time"
+                    }
                     Text(
-                        "\uD83D\uDD04  Refresh Today's Summary",
+                        "\uD83D\uDD04  Refresh $periodLabel",
                         color = AccentGreen,
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 15.sp
@@ -355,8 +408,14 @@ fun ExpenseDashboard(modifier: Modifier = Modifier, onRerunSetup: () -> Unit = {
         // ── SECTION 8: Transaction List ──
         if (dailySummary != null && dailySummary!!.categories.isNotEmpty()) {
             item {
+                val periodLabel = when (selectedPeriod) {
+                    InsightGenerator.TimePeriod.TODAY -> "Today's"
+                    InsightGenerator.TimePeriod.THIS_WEEK -> "This Week's"
+                    InsightGenerator.TimePeriod.THIS_MONTH -> "This Month's"
+                    InsightGenerator.TimePeriod.ALL -> "All"
+                }
                 Text(
-                    text = "\uD83D\uDCCB Today's Transactions",
+                    text = "\uD83D\uDCCB $periodLabel Transactions",
                     fontSize = 18.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = TextPrimary,
@@ -389,6 +448,13 @@ fun ExpenseDashboard(modifier: Modifier = Modifier, onRerunSetup: () -> Unit = {
                                 Log.e("DASHBOARD", "❌ Delete failed: ${e.message}")
                             }
                         }
+                    },
+                    onSplit = {
+                        // Open split bottom sheet with this transaction's details
+                        splitAmount = item.amount
+                        splitMerchant = item.merchant
+                        splitDescription = item.aiInsight ?: item.merchant
+                        showSplitSheet = true
                     }
                 )
             }
@@ -453,6 +519,22 @@ fun ExpenseDashboard(modifier: Modifier = Modifier, onRerunSetup: () -> Unit = {
 
         // Bottom spacer
         item { Spacer(modifier = Modifier.height(40.dp)) }
+    }
+
+    // ── Splitwise Bottom Sheet ──
+    if (showSplitSheet) {
+        androidx.compose.material3.ModalBottomSheet(
+            onDismissRequest = { showSplitSheet = false },
+            containerColor = Color.Transparent
+        ) {
+            SplitBottomSheet(
+                amount = splitAmount,
+                merchant = splitMerchant,
+                description = splitDescription,
+                onDismiss = { showSplitSheet = false },
+                onSplitCreated = { showSplitSheet = false }
+            )
+        }
     }
 }
 
@@ -538,6 +620,51 @@ fun GradientHeader() {
                     fontSize = 12.sp,
                     color = AccentGreen.copy(alpha = 0.8f),
                     fontWeight = FontWeight.Medium
+                )
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TIME PERIOD FILTER ROW — Today, This Week, This Month, All
+// ═══════════════════════════════════════════════════════════════
+@Composable
+fun TimePeriodFilterRow(
+    selectedPeriod: InsightGenerator.TimePeriod,
+    onPeriodSelected: (InsightGenerator.TimePeriod) -> Unit
+) {
+    val periods = listOf(
+        InsightGenerator.TimePeriod.TODAY to "Today",
+        InsightGenerator.TimePeriod.THIS_WEEK to "Week",
+        InsightGenerator.TimePeriod.THIS_MONTH to "Month",
+        InsightGenerator.TimePeriod.ALL to "All"
+    )
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        periods.forEach { (period, label) ->
+            val isSelected = selectedPeriod == period
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(
+                        if (isSelected) AccentGreen else SurfaceCard
+                    )
+                    .clickable { onPeriodSelected(period) }
+                    .padding(vertical = 12.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = label,
+                    color = if (isSelected) Color.Black else TextPrimary,
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                    fontSize = 14.sp
                 )
             }
         }
@@ -697,6 +824,31 @@ fun CollapsibleSettingsCard(
                         }
                     }
 
+                    // Overlay permission check (required for popup when app is in background)
+                    val hasOverlayPermission = Settings.canDrawOverlays(context)
+                    if (!hasOverlayPermission) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = {
+                                val intent = Intent(
+                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                    android.net.Uri.parse("package:${context.packageName}")
+                                )
+                                context.startActivity(intent)
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("⚠️ Enable Display Over Other Apps", color = AccentGold)
+                        }
+                        Text(
+                            text = "Required for category popup when app is in background",
+                            fontSize = 11.sp,
+                            color = TextMuted,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+
                     // Notification listener hint (always shown)
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedButton(
@@ -717,6 +869,154 @@ fun CollapsibleSettingsCard(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text("\uD83D\uDD04  Re-run Setup Wizard", color = TextMuted)
+                    }
+
+                    // ── Splitwise Integration ──
+                    Spacer(modifier = Modifier.height(16.dp))
+                    HorizontalDivider(color = TextMuted.copy(alpha = 0.3f))
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    val isSplitwiseConnected = SplitwiseManager.isLoggedIn(context)
+
+                    Text(
+                        "Splitwise Integration",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = TextSecondary
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    if (isSplitwiseConnected) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .clip(CircleShape)
+                                        .background(AccentGreen)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Connected to Splitwise", color = AccentGreen, fontSize = 13.sp)
+                            }
+                            TextButton(onClick = {
+                                SplitwiseManager.logout(context)
+                                Toast.makeText(context, "Disconnected from Splitwise", Toast.LENGTH_SHORT).show()
+                            }) {
+                                Text("Disconnect", color = AccentRed, fontSize = 12.sp)
+                            }
+                        }
+                    } else {
+                        Button(
+                            onClick = { SplitwiseManager.startLogin(context) },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF5BC5A7).copy(alpha = 0.2f)),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("🔗 Connect Splitwise", color = Color(0xFF5BC5A7))
+                        }
+                        Text(
+                            text = "Split expenses with friends directly from transactions",
+                            fontSize = 11.sp,
+                            color = TextMuted,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+
+                    // ── Popup Settings ──
+                    Spacer(modifier = Modifier.height(16.dp))
+                    HorizontalDivider(color = TextMuted.copy(alpha = 0.3f))
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Text(
+                        "Category Popup",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = TextSecondary
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Get current popup mode from SharedPreferences
+                    val prefs = context.getSharedPreferences("expense_intelligence_prefs", Context.MODE_PRIVATE)
+                    var popupMode by remember {
+                        mutableStateOf(prefs.getString("popup_mode", "smart") ?: "smart")
+                    }
+
+                    // Option A: All Payments
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(if (popupMode == "all") AccentPurple.copy(alpha = 0.15f) else Color.Transparent)
+                            .clickable {
+                                popupMode = "all"
+                                prefs.edit().putString("popup_mode", "all").apply()
+                            }
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(20.dp)
+                                .clip(CircleShape)
+                                .background(if (popupMode == "all") AccentPurple else SurfaceCard)
+                                .padding(4.dp)
+                        ) {
+                            if (popupMode == "all") {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .clip(CircleShape)
+                                        .background(Color.White)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text("All Payments", color = TextPrimary, fontWeight = FontWeight.Medium)
+                            Text("Show popup for every payment", fontSize = 11.sp, color = TextMuted)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    // Option B: Smart (Unknown merchants only)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(if (popupMode == "smart") AccentPurple.copy(alpha = 0.15f) else Color.Transparent)
+                            .clickable {
+                                popupMode = "smart"
+                                prefs.edit().putString("popup_mode", "smart").apply()
+                            }
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(20.dp)
+                                .clip(CircleShape)
+                                .background(if (popupMode == "smart") AccentPurple else SurfaceCard)
+                                .padding(4.dp)
+                        ) {
+                            if (popupMode == "smart") {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .clip(CircleShape)
+                                        .background(Color.White)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text("Unknown Merchants Only", color = TextPrimary, fontWeight = FontWeight.Medium)
+                            Text("Skip popup for known apps (Zomato, Uber, etc.)", fontSize = 11.sp, color = TextMuted)
+                        }
                     }
                 }
             }
@@ -1167,10 +1467,13 @@ fun SpendProportionBar(summary: InsightGenerator.DailySummary) {
 fun TransactionCard(
     category: String,
     item: InsightGenerator.TransactionItem,
-    onDelete: () -> Unit = {}
+    onDelete: () -> Unit = {},
+    onSplit: () -> Unit = {}
 ) {
+    val context = LocalContext.current
     val catColor = getCategoryColor(category)
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    val isSplitwiseConnected = remember { SplitwiseManager.isLoggedIn(context) }
 
     // Delete confirmation dialog
     if (showDeleteConfirm) {
@@ -1249,7 +1552,23 @@ fun TransactionCard(
                             fontWeight = FontWeight.Bold,
                             color = AccentRed
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
+                        // 📤 Split button (only show if Splitwise connected)
+                        if (isSplitwiseConnected) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "📤",
+                                fontSize = 14.sp,
+                                modifier = Modifier
+                                    .clip(CircleShape)
+                                    .clickable { onSplit() }
+                                    .background(
+                                        Color(0xFF5BC5A7).copy(alpha = 0.15f),
+                                        CircleShape
+                                    )
+                                    .padding(6.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(6.dp))
                         // 🗑️ Delete button
                         Text(
                             text = "✕",

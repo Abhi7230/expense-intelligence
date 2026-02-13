@@ -44,6 +44,10 @@ interface NotificationDao {
     @Query("SELECT * FROM notifications WHERE amount IS NOT NULL ORDER BY timestamp DESC")
     fun getAllTransactionsWithAmount(): List<NotificationEntity>
 
+    // Get transactions since a specific timestamp (for time period filtering)
+    @Query("SELECT * FROM notifications WHERE amount IS NOT NULL AND timestamp >= :since ORDER BY timestamp DESC")
+    fun getTransactionsSince(since: Long): List<NotificationEntity>
+
     // Get transactions with bad/unknown correlation that need to be re-processed
     @Query("""
         SELECT * FROM notifications 

@@ -3,6 +3,7 @@ package com.example.myapplication
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
+import android.content.Intent
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
@@ -178,6 +179,31 @@ class MyNotificationListenerService : NotificationListenerService() {
                     val savedEntity = db.notificationDao().getById(insertedId.toInt())
 
                     if (savedEntity != null) {
+                        // ── NEW: Check if merchant is already learned ──
+                        val normalizedMerchant = (parsed.merchant ?: "").lowercase().trim()
+                        val learnedAlias = if (normalizedMerchant.isNotBlank()) {
+                            db.merchantAliasDao().findByName(normalizedMerchant)
+                        } else null
+
+                        if (learnedAlias != null) {
+                            // Auto-apply learned category — skip correlation!
+                            Log.d(TAG, "🧠 Using learned category for '$normalizedMerchant': ${learnedAlias.category}")
+                            val finalCategory = learnedAlias.subcategory ?: learnedAlias.category
+                            db.notificationDao().updateCorrelation(
+                                id = savedEntity.id,
+                                category = finalCategory,
+                                correlatedApp = null,
+                                confidence = "learned"
+                            )
+                            db.merchantAliasDao().incrementUsage(learnedAlias.id)
+
+                            // If the learned alias has a note, use it as AI insight
+                            if (!learnedAlias.userNote.isNullOrBlank()) {
+                                db.notificationDao().updateAiInsight(savedEntity.id, learnedAlias.userNote)
+                            }
+                            return@thread
+                        }
+
                         // Step 7: Correlate
                         val windowStart = sbn.postTime - (10 * 60 * 1000L)
                         val recentUsages = db.appUsageDao().getUsageInWindow(windowStart, sbn.postTime).toMutableList()
@@ -206,12 +232,60 @@ class MyNotificationListenerService : NotificationListenerService() {
 
                         val result = CorrelationEngine.correlate(savedEntity, recentUsages)
 
-                        // ── Skip offline/cash purchases entirely ──
-                        // If no app was detected, it's likely a false positive
-                        // or an offline purchase we don't want to track.
-                        if (result.correlatedApp == null || result.category.contains("Offline", ignoreCase = true)) {
-                            Log.d(TAG, "🚫 No app correlated (offline/cash) — removing entry #${savedEntity.id}")
-                            db.notificationDao().deleteById(savedEntity.id)
+                        // ── Check popup settings ──
+                        val prefs = applicationContext.getSharedPreferences("expense_intelligence_prefs", android.content.Context.MODE_PRIVATE)
+                        val popupMode = prefs.getString("popup_mode", "smart") ?: "smart"
+                        
+                        // Determine if we should show popup
+                        // Include "Unknown" category and our own app being in foreground (user was in our app)
+                        val isOurOwnApp = result.correlatedApp?.contains("myapplication", ignoreCase = true) == true
+                        val isUnknownMerchant = result.correlatedApp == null || 
+                                                isOurOwnApp ||
+                                                result.category.contains("Offline", ignoreCase = true) ||
+                                                result.category.contains("Payment App", ignoreCase = true) ||
+                                                result.category.contains("Unknown", ignoreCase = true) ||
+                                                result.confidence == "low"
+                        
+                        val shouldShowPopup = when (popupMode) {
+                            "all" -> true  // Show popup for ALL payments
+                            else -> isUnknownMerchant  // Smart mode: only for unknown merchants
+                        }
+
+                        if (shouldShowPopup) {
+                            Log.d(TAG, "🔔 Launching category popup (mode: $popupMode, unknown: $isUnknownMerchant)")
+
+                            // Save with temporary category (user will update via popup)
+                            db.notificationDao().updateCorrelation(
+                                id = savedEntity.id,
+                                category = result.category,
+                                correlatedApp = result.correlatedApp,
+                                confidence = if (isUnknownMerchant) "low" else result.confidence
+                            )
+
+                            // Check if we have permission to display over other apps
+                            val canDrawOverlays = android.provider.Settings.canDrawOverlays(applicationContext)
+                            
+                            if (canDrawOverlays) {
+                                // Launch the category popup
+                                val popupIntent = Intent(applicationContext, CategoryPopupActivity::class.java).apply {
+                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or 
+                                            Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                                            Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
+                                    putExtra(CategoryPopupActivity.EXTRA_TRANSACTION_ID, savedEntity.id)
+                                    putExtra(CategoryPopupActivity.EXTRA_AMOUNT, parsed.amount)
+                                    putExtra(CategoryPopupActivity.EXTRA_MERCHANT, parsed.merchant)
+                                    putExtra(CategoryPopupActivity.EXTRA_TIMESTAMP, sbn.postTime)
+                                }
+                                applicationContext.startActivity(popupIntent)
+                            } else {
+                                // Fallback: Show a notification with action buttons instead
+                                Log.d(TAG, "⚠️ No overlay permission — showing notification instead")
+                                showCategoryNotification(
+                                    transactionId = savedEntity.id,
+                                    amount = parsed.amount ?: "?",
+                                    merchant = parsed.merchant ?: "Unknown"
+                                )
+                            }
                             return@thread
                         }
 
@@ -280,5 +354,57 @@ class MyNotificationListenerService : NotificationListenerService() {
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {
         if (sbn == null) return
         Log.d(TAG, "Notification removed from: ${sbn.packageName}")
+    }
+
+    /**
+     * Fallback when we can't show the popup overlay.
+     * Shows a notification that user can tap to categorize.
+     */
+    private fun showCategoryNotification(transactionId: Int, amount: String, merchant: String) {
+        try {
+            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+            
+            // Create notification channel if needed
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                val channel = android.app.NotificationChannel(
+                    "category_prompt",
+                    "Category Prompts",
+                    android.app.NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    description = "Prompts to categorize payments"
+                }
+                notificationManager.createNotificationChannel(channel)
+            }
+            
+            // Intent to open the popup activity
+            val popupIntent = Intent(applicationContext, CategoryPopupActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra(CategoryPopupActivity.EXTRA_TRANSACTION_ID, transactionId)
+                putExtra(CategoryPopupActivity.EXTRA_AMOUNT, amount)
+                putExtra(CategoryPopupActivity.EXTRA_MERCHANT, merchant)
+                putExtra(CategoryPopupActivity.EXTRA_TIMESTAMP, System.currentTimeMillis())
+            }
+            
+            val pendingIntent = android.app.PendingIntent.getActivity(
+                applicationContext,
+                transactionId,
+                popupIntent,
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+            )
+            
+            // Build notification
+            val notification = android.app.Notification.Builder(applicationContext, "category_prompt")
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle("💸 ₹$amount to $merchant")
+                .setContentText("Tap to categorize this payment")
+                .setAutoCancel(true)
+                .setContentIntent(pendingIntent)
+                .build()
+            
+            notificationManager.notify(transactionId, notification)
+            Log.d(TAG, "📬 Category prompt notification shown")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to show category notification: ${e.message}")
+        }
     }
 }

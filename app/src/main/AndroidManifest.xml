@@ -19,6 +19,9 @@
     <!-- Battery optimization exemption (for setup wizard "Unrestricted" prompt) -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+    <!-- Display over other apps (for category popup when app is in background) -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
     <application
         android:allowBackup="true"
         android:label="@string/app_name"
@@ -31,7 +34,27 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!-- Deep link handler for Splitwise OAuth callback -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="expenseintel"
+                    android:host="splitwise"
+                    android:path="/callback" />
+            </intent-filter>
         </activity>
+
+        <!-- Category Popup Activity (overlay for offline purchases) -->
+        <activity
+            android:name=".CategoryPopupActivity"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:launchMode="singleInstance"
+            android:taskAffinity=""
+            android:exported="false" />
 
         <!-- Foreground service (Step 2) -->
         <service
