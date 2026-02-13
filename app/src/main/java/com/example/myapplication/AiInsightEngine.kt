@@ -51,6 +51,92 @@ object AiInsightEngine {
     )
 
     /**
+     * LIGHTWEIGHT AI CHECK: Is this notification a real payment?
+     *
+     * Used for "uncertain" messages — ones that contain an amount (₹/Rs)
+     * but DON'T have a clear payment verb like "paid" or "debited".
+     *
+     * Example uncertain messages:
+     *   "Get ₹201 off on purchase"     → AI should say: NO (promo)
+     *   "₹150 for your Swiggy order"   → AI should say: YES (payment)
+     *   "Save ₹500 on your next ride"  → AI should say: NO (ad)
+     *
+     * Uses the smaller, faster llama-3.1-8b-instant model to minimize latency.
+     * Returns true if AI thinks it's a real payment, false otherwise.
+     * Falls back to false (skip) on any error.
+     */
+    fun isRealPayment(notificationText: String): Boolean {
+        if (GROQ_API_KEY.isBlank() || GROQ_API_KEY == "PASTE_YOUR_GROQ_KEY_HERE") {
+            Log.w(TAG, "⚠️ No API key — can't verify, skipping uncertain notification")
+            return false
+        }
+
+        val prompt = """
+You are a payment detection system. Given a phone notification message, determine if it describes an ACTUAL payment/expense (money leaving the user's account) or NOT (advertisement, offer, cashback, promotional message, income).
+
+Notification: "$notificationText"
+
+Rules:
+- "paid", "sent", "debited", "charged" = REAL payment → YES
+- "off", "cashback", "offer", "discount", "earn", "win", "reward" = NOT a payment → NO
+- "credited", "received" = income, NOT expense → NO
+- If unsure, say NO
+
+Respond with ONLY one word: YES or NO
+        """.trim()
+
+        return try {
+            Log.d(TAG, "🔍 AI verifying uncertain notification: ${notificationText.take(60)}...")
+            val url = URL(GROQ_URL)
+            val connection = url.openConnection() as HttpURLConnection
+            connection.requestMethod = "POST"
+            connection.setRequestProperty("Content-Type", "application/json")
+            connection.setRequestProperty("Authorization", "Bearer $GROQ_API_KEY")
+            connection.doOutput = true
+            connection.connectTimeout = 10000
+            connection.readTimeout = 10000
+
+            val body = JSONObject().apply {
+                put("model", "llama-3.1-8b-instant")  // smaller, faster model for quick checks
+                put("messages", JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("role", "user")
+                        put("content", prompt)
+                    })
+                })
+                put("temperature", 0.0)   // deterministic — we want consistent YES/NO
+                put("max_tokens", 5)      // only need "YES" or "NO"
+            }
+
+            val writer = OutputStreamWriter(connection.outputStream)
+            writer.write(body.toString())
+            writer.flush()
+            writer.close()
+
+            if (connection.responseCode != 200) {
+                Log.e(TAG, "❌ AI verify failed: HTTP ${connection.responseCode}")
+                return false
+            }
+
+            val response = BufferedReader(InputStreamReader(connection.inputStream)).readText()
+            val json = JSONObject(response)
+            val answer = json.getJSONArray("choices")
+                .getJSONObject(0)
+                .getJSONObject("message")
+                .getString("content")
+                .trim()
+                .uppercase()
+
+            val isPayment = answer.contains("YES")
+            Log.d(TAG, "🔍 AI verdict: $answer → ${if (isPayment) "KEEP ✅" else "SKIP ❌"}")
+            isPayment
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ AI verification failed: ${e.message} — skipping to be safe")
+            false
+        }
+    }
+
+    /**
      * Main function: generates an AI insight for a payment.
      * Returns null if API key is missing or call fails.
      */

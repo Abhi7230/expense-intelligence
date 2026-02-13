@@ -60,6 +60,10 @@ interface NotificationDao {
     @Query("SELECT * FROM notifications WHERE amount = :amount AND timestamp >= :since LIMIT 1")
     fun findRecentByAmount(amount: String, since: Long): NotificationEntity?
 
+    // Delete a single transaction by its ID
+    @Query("DELETE FROM notifications WHERE id = :id")
+    fun deleteById(id: Int)
+
     // Delete ALL data (for privacy "Delete All" button)
     @Query("DELETE FROM notifications")
     fun deleteAll()

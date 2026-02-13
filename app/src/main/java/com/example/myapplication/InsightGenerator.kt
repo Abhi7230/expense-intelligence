@@ -39,6 +39,7 @@ object InsightGenerator {
     )
 
     data class TransactionItem(
+        val dbId: Int = 0,              // database row ID — for deletion
         val amount: Double,
         val merchant: String,
         val aiInsight: String?,
@@ -94,6 +95,7 @@ object InsightGenerator {
                 // Try to infer necessity from category name
                 val necessity = guessNecessity(tx.category, tx.merchant)
                 TransactionItem(
+                    dbId = tx.id,
                     amount = amt,
                     merchant = tx.merchant ?: "Unknown",
                     aiInsight = tx.aiInsight,

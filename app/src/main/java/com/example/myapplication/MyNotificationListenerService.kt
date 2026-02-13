@@ -53,7 +53,52 @@ class MyNotificationListenerService : NotificationListenerService() {
         // ── FILTER 4: Skip empty/useless notifications ──
         if (text == "No Text" || text.isBlank()) return
 
-        // ── FILTER 5: Smart dedup for bank debit/credit SMS ──
+        // ── FILTER 5: WHITELIST — only process real payment messages ──
+        // Instead of blacklisting promo keywords (endless), we WHITELIST:
+        // A message must contain an amount AND a payment verb to be a transaction.
+        //   "Get ₹201 off"         → has amount, no payment verb → SKIP (promo)
+        //   "₹183 paid to Uber"    → has amount + "paid"         → KEEP (expense)
+        //   "Rs.183 debited"       → has amount + "debited"      → KEEP (expense)
+        //   "Rs.5000 credited"     → has amount + "credited"     → SKIP (income, not expense)
+        //
+        // NOTE: "credited" and "received" are intentionally EXCLUDED.
+        //   Debited = money LEFT your account (expense ✅)
+        //   Credited = money CAME INTO your account (income ❌)
+        val textLower = text.lowercase()
+        val hasAmount = Regex(
+            """(?:₹|rs\.?\s?|inr)\s*[\d,]+|[\d,]+\s*(?:₹|rs\.?|inr|rupees?)""",
+            RegexOption.IGNORE_CASE
+        ).containsMatchIn(text)
+
+        if (hasAmount) {
+            val paymentVerbs = listOf(
+                "paid", "sent", "debited", "transferred",
+                "payment successful", "payment of",
+                "transaction", "txn", "withdrawn",
+                "charged", "deducted", "money sent"
+            )
+            val hasPaymentVerb = paymentVerbs.any { textLower.contains(it) }
+
+            if (!hasPaymentVerb) {
+                // UNCERTAIN CASE: has an amount (₹/Rs) but no clear payment verb.
+                // Could be a promo ("Get ₹201 off") or a real payment ("₹150 for Swiggy order").
+                // Ask AI to verify before skipping.
+                Log.d(TAG, "🤔 Uncertain message — asking AI to verify: ${text.take(80)}...")
+                val isRealPayment = try {
+                    AiInsightEngine.isRealPayment(text)
+                } catch (e: Exception) {
+                    Log.e(TAG, "⚠️ AI verify error: ${e.message} — skipping to be safe")
+                    false
+                }
+                if (!isRealPayment) {
+                    Log.d(TAG, "⏭️ AI confirmed: NOT a payment — skipping")
+                    return
+                }
+                Log.d(TAG, "✅ AI confirmed: IS a real payment — keeping")
+            }
+        }
+
+        // ── FILTER 6: Smart dedup for bank debit SMS ──
         //
         // WHY SMART DEDUP?
         // When you pay via GPay, you often get TWO notifications:
@@ -66,8 +111,7 @@ class MyNotificationListenerService : NotificationListenerService() {
         //
         // SOLUTION: Check if we already captured a payment with the SAME amount
         // in the last 3 minutes. If yes → skip (duplicate). If no → keep (only signal).
-        val textLower = text.lowercase()
-        val isBankDebitSms = (textLower.contains("debited") || textLower.contains("credited")) &&
+        val isBankDebitSms = textLower.contains("debited") &&
                 (textLower.contains("a/c") || textLower.contains("acct") ||
                  textLower.contains("account") || textLower.contains("ending") ||
                  textLower.contains("bank") || textLower.contains("balance"))
@@ -162,6 +206,15 @@ class MyNotificationListenerService : NotificationListenerService() {
 
                         val result = CorrelationEngine.correlate(savedEntity, recentUsages)
 
+                        // ── Skip offline/cash purchases entirely ──
+                        // If no app was detected, it's likely a false positive
+                        // or an offline purchase we don't want to track.
+                        if (result.correlatedApp == null || result.category.contains("Offline", ignoreCase = true)) {
+                            Log.d(TAG, "🚫 No app correlated (offline/cash) — removing entry #${savedEntity.id}")
+                            db.notificationDao().deleteById(savedEntity.id)
+                            return@thread
+                        }
+
                         db.notificationDao().updateCorrelation(
                             id = savedEntity.id,
                             category = result.category,
@@ -171,7 +224,7 @@ class MyNotificationListenerService : NotificationListenerService() {
 
                         Log.d(TAG, "🧠 CORRELATION COMPLETE:")
                         Log.d(TAG, "   Category: ${result.category}")
-                        Log.d(TAG, "   App:      ${result.correlatedApp ?: "none (offline)"}")
+                        Log.d(TAG, "   App:      ${result.correlatedApp}")
                         Log.d(TAG, "   Confidence: ${result.confidence}")
 
                         // Step 8: Ask AI for a "digital memory" description

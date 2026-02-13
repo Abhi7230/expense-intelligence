@@ -369,7 +369,28 @@ fun ExpenseDashboard(modifier: Modifier = Modifier, onRerunSetup: () -> Unit = {
             }.sortedByDescending { it.second.timestamp }  // newest first
 
             items(allItems) { (category, item) ->
-                TransactionCard(category, item)
+                TransactionCard(
+                    category = category,
+                    item = item,
+                    onDelete = {
+                        // Delete from DB + refresh the UI
+                        thread {
+                            try {
+                                val db = AppDatabase.getDatabase(context)
+                                db.notificationDao().deleteById(item.dbId)
+                                Log.d("DASHBOARD", "🗑️ Deleted transaction #${item.dbId}")
+
+                                // Refresh summaries
+                                val summary = InsightGenerator.generateDailySummary(db.notificationDao())
+                                val apps = InsightGenerator.getTopAppsBySpending(db.notificationDao())
+                                dailySummary = summary
+                                topApps = apps
+                            } catch (e: Exception) {
+                                Log.e("DASHBOARD", "❌ Delete failed: ${e.message}")
+                            }
+                        }
+                    }
+                )
             }
         }
 
@@ -1143,8 +1164,43 @@ fun SpendProportionBar(summary: InsightGenerator.DailySummary) {
 // TRANSACTION CARD — colored side bar, necessity badge
 // ═══════════════════════════════════════════════════════════════
 @Composable
-fun TransactionCard(category: String, item: InsightGenerator.TransactionItem) {
+fun TransactionCard(
+    category: String,
+    item: InsightGenerator.TransactionItem,
+    onDelete: () -> Unit = {}
+) {
     val catColor = getCategoryColor(category)
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+
+    // Delete confirmation dialog
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            containerColor = SurfaceCard,
+            title = {
+                Text("Delete Transaction?", color = TextPrimary, fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Text(
+                    "Remove ₹${String.format("%.0f", item.amount)} to ${item.merchant} from your records?",
+                    color = TextSecondary
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDeleteConfirm = false
+                    onDelete()
+                }) {
+                    Text("Delete", color = AccentRed, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) {
+                    Text("Cancel", color = TextMuted)
+                }
+            }
+        )
+    }
 
     Card(
         modifier = Modifier
@@ -1186,12 +1242,30 @@ fun TransactionCard(category: String, item: InsightGenerator.TransactionItem) {
                         color = TextPrimary,
                         modifier = Modifier.weight(1f)
                     )
-                    Text(
-                        text = "\u20B9${String.format("%.0f", item.amount)}",
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = AccentRed
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "\u20B9${String.format("%.0f", item.amount)}",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = AccentRed
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        // 🗑️ Delete button
+                        Text(
+                            text = "✕",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextMuted,
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .clickable { showDeleteConfirm = true }
+                                .background(
+                                    TextMuted.copy(alpha = 0.1f),
+                                    CircleShape
+                                )
+                                .padding(6.dp)
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(6.dp))
