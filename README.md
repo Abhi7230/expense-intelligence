@@ -1,50 +1,86 @@
 # Expense Intelligence
 
-**AI-powered personal expense tracker for Android** that automatically detects payments from your phone's notifications, correlates them with app usage behavior, and generates intelligent spending insights — all running locally on your device.
+**AI-powered personal expense tracker for Android** that automatically detects payments from your phone's notifications, categorizes them intelligently, and lets you split expenses with friends — all running locally on your device.
 
-## What It Does
+## ✨ What It Does
 
 Most expense trackers make you manually log every purchase. This app does the opposite — it **listens to your phone's notifications** (GPay, PhonePe, bank SMS, etc.), automatically extracts transaction details, and uses AI to understand **what you bought, when, and why**.
 
 ### Core Features
 
-- **Auto-capture payments** — Reads payment notifications from UPI apps, banking apps, and SMS in real-time
-- **Smart parsing** — Extracts amount, merchant name, and payment mode using regex-based parsing
-- **Behavioral correlation** — Tracks which apps you were using before a payment to understand context (e.g., you were on Zomato → payment detected → categorized as "Food Delivery")
-- **AI-powered insights** — Uses Groq AI (Llama 3.3 70B) to generate human-readable descriptions like *"Late evening street food dinner from a local stall"*
-- **Need vs Want classification** — Automatically tags transactions as necessities or discretionary spending
-- **Daily dashboard** — Visual spending summary with category breakdown and proportion bar
-- **Weekly behavioral analysis** — AI analyzes your spending patterns across the week
+| Feature | Description |
+|---------|-------------|
+| 🔔 **Auto-capture payments** | Reads payment notifications from UPI apps, banking apps, and SMS in real-time |
+| 🧠 **AI-powered insights** | Uses Groq AI (Llama 3.3 70B) to generate descriptions like *"Late evening street food dinner"* |
+| 📊 **Behavioral correlation** | Tracks which apps you were using before a payment to understand context |
+| 💡 **Smart category popup** | Shows a popup when you receive a payment, letting you categorize unknown merchants |
+| 🧠 **Merchant learning** | Remembers how you categorize merchants and auto-categorizes future payments |
+| 💚 **Quick Splitwise** | One-tap button to add any expense to Splitwise |
+| 📅 **Time period filters** | View transactions for Today, This Week, This Month, or All Time |
+| 🏷️ **Need vs Want** | Automatically tags transactions as necessities or discretionary spending |
 
-## Architecture
+## 📱 Screenshots
 
 ```
-Payment Notification → NotificationListenerService → TransactionParser (regex)
-                                                            ↓
-                                                   Room Database (local)
-                                                            ↓
-                                          CorrelationEngine (app usage matching)
-                                                            ↓
-                                              Groq AI (digital memory generation)
-                                                            ↓
-                                                  Jetpack Compose Dashboard
+┌─────────────────────────────────────────────┐
+│         💰 Expense Intelligence             │
+│         Friday, 14 Feb 2025                 │
+├─────────────────────────────────────────────┤
+│  [Today]  │  Week  │  Month  │  All        │
+├─────────────────────────────────────────────┤
+│  💸 Today's Spending: ₹1,250               │
+│  📊 5 transactions                          │
+├─────────────────────────────────────────────┤
+│  🍕 Swiggy          ₹350   [Split] 12:30 PM│
+│  ☕ Chai Wala        ₹50           10:15 AM│
+│  🚕 Uber            ₹150            8:00 AM│
+└─────────────────────────────────────────────┘
+```
+
+## 🏗️ Architecture
+
+```
+Payment Notification → NotificationListenerService → TransactionParser
+                                   ↓
+                        ┌──────────┴──────────┐
+                        ↓                      ↓
+              Room Database            Check Learned Merchants
+                        ↓                      ↓
+              CorrelationEngine ←──── MerchantAliasDao
+                        ↓
+            ┌───────────┴───────────┐
+            ↓                       ↓
+    Known App?                Unknown Merchant?
+    (Zomato, Uber)            (GPay to friend)
+            ↓                       ↓
+    Auto-categorize          Show Category Popup
+            ↓                       ↓
+        Groq AI ←────────── User Selection
+            ↓                       ↓
+    "Digital Memory"         Learn Merchant
+            ↓                       ↓
+    ────────────────────────────────
+                    ↓
+         Jetpack Compose Dashboard
 ```
 
 ### Key Components
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| Notification Capture | `MyNotificationListenerService.kt` | Reads all notifications, filters payment ones |
-| App Usage Tracking | `MyForegroundService.kt` | Polls `UsageStatsManager` every 5s to detect app switches |
-| Transaction Parser | `TransactionParser.kt` | Regex extraction of amount, merchant, payment mode |
-| Correlation Engine | `CorrelationEngine.kt` | Links payments to preceding app usage sessions |
-| AI Engine | `AiInsightEngine.kt` | Calls Groq API for natural language descriptions |
-| Insight Generator | `InsightGenerator.kt` | Aggregates daily/weekly summaries, calls AI for patterns |
-| App Knowledge Base | `AppKnowledgeBase.kt` | Maps package names to friendly names and categories |
-| Local Database | `AppDatabase.kt` | Room DB with `notifications` and `app_usage` tables |
+| Notification Capture | `MyNotificationListenerService.kt` | Reads notifications, filters payments, triggers popup |
+| App Usage Tracking | `MyForegroundService.kt` | Polls `UsageStatsManager` every 5s |
+| Transaction Parser | `TransactionParser.kt` | Regex extraction of amount, merchant, mode |
+| Correlation Engine | `CorrelationEngine.kt` | Links payments to app usage sessions |
+| AI Engine | `AiInsightEngine.kt` | Groq API for natural language descriptions |
+| Category Popup | `CategoryPopupActivity.kt` | Overlay popup for manual categorization |
+| Time Suggestions | `TimeSuggestionEngine.kt` | Suggests categories based on time of day |
+| Merchant Learning | `MerchantAliasDao.kt` | Stores user's category preferences per merchant |
+| Subscription Detector | `SubscriptionDetector.kt` | Identifies recurring payments |
+| Insight Generator | `InsightGenerator.kt` | Aggregates summaries with time period support |
 | Dashboard UI | `MainActivity.kt` | Jetpack Compose dark-themed dashboard |
 
-## Tech Stack
+## 🛠️ Tech Stack
 
 - **Language**: Kotlin
 - **UI**: Jetpack Compose + Material 3
@@ -53,12 +89,13 @@ Payment Notification → NotificationListenerService → TransactionParser (rege
 - **Background**: ForegroundService + NotificationListenerService
 - **Build**: Gradle with KSP for Room annotation processing
 
-## Setup
+## 🚀 Setup
 
 ### Prerequisites
 - Android Studio (Arctic Fox or later)
-- Android device/emulator running API 24+ (Android 7.0+)
+- Android device/emulator running API 26+ (Android 8.0+)
 - A [Groq API key](https://console.groq.com/keys) (free)
+- *(Optional)* [Splitwise app credentials](https://secure.splitwise.com/apps) for expense splitting
 
 ### Steps
 
@@ -68,51 +105,110 @@ Payment Notification → NotificationListenerService → TransactionParser (rege
    cd expense-intelligence
    ```
 
-2. **Add your API key** — Open `local.properties` and add:
-   ```properties
-   GROQ_API_KEY=your_groq_api_key_here
+2. **Configure API keys**
+   
+   Copy the example file:
+   ```bash
+   cp local.properties.example local.properties
    ```
-   > This file is in `.gitignore` and will never be committed.
+   
+   Edit `local.properties` and add your keys:
+   ```properties
+   sdk.dir=/path/to/your/Android/sdk
+   GROQ_API_KEY=your_groq_api_key_here
+   
+   # Optional: For Splitwise integration
+   SPLITWISE_CLIENT_ID=your_client_id
+   SPLITWISE_CLIENT_SECRET=your_client_secret
+   ```
 
 3. **Build and run** — Open in Android Studio → Select your device → Run
 
 4. **Grant permissions** on the device:
-   - **Notification Access**: Settings → Notification Listener → Enable for "Expense Intelligence"
-   - **Usage Access**: Settings → Usage Access → Enable for "Expense Intelligence"
+   - **Notification Access**: Settings → Notification Listener → Enable
+   - **Usage Access**: Settings → Usage Access → Enable
+   - **Display Over Other Apps**: Settings → Special Access → Enable *(for popup)*
    - **Notification permission** (Android 13+): Allow when prompted
 
-5. **Start the service** — Tap the Settings card → Start button
+5. **Start the service** — Tap Settings card → Start button
 
-## Permissions
+## 🔐 Permissions
 
 | Permission | Why |
 |------------|-----|
-| `BIND_NOTIFICATION_LISTENER_SERVICE` | Read payment notifications from other apps |
-| `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_SPECIAL_USE` | Keep tracking service alive in background |
-| `PACKAGE_USAGE_STATS` | Detect which app was open before a payment |
-| `POST_NOTIFICATIONS` | Show the persistent service notification |
-| `INTERNET` | Call Groq AI API for insight generation |
+| `BIND_NOTIFICATION_LISTENER_SERVICE` | Read payment notifications |
+| `FOREGROUND_SERVICE` | Keep tracking service alive |
+| `PACKAGE_USAGE_STATS` | Detect which app was open before payment |
+| `SYSTEM_ALERT_WINDOW` | Show category popup over other apps |
+| `POST_NOTIFICATIONS` | Show service notification |
+| `INTERNET` | Call Groq AI API |
 
-## How It Works (Technical Deep Dive)
+## ⚙️ Settings
 
-1. **Notification arrives** (e.g., "₹250 paid to Swiggy via UPI")
-2. `NotificationListenerService` captures it and passes the text to `TransactionParser`
-3. Parser extracts: `amount=250`, `merchant=Swiggy`, `mode=UPI`
-4. Data is saved to Room database
-5. `CorrelationEngine` checks `app_usage` table: "What app was the user on in the last 10 minutes?"
-6. Finds Swiggy was open for 4 minutes → category: "Food Delivery", confidence: "high"
-7. `AiInsightEngine` sends the context to Groq → AI returns: *"Evening food delivery order from Swiggy, likely dinner"*
-8. Everything is stored and displayed on the dashboard
+The app includes configurable settings:
 
-## Screenshots
+| Setting | Options | Description |
+|---------|---------|-------------|
+| **Popup Mode** | All / Smart | Show popup for every payment or only unknown merchants |
+| **Time Filter** | Today / Week / Month / All | Filter transactions by time period |
+| **Splitwise** | Connect / Disconnect | Link your Splitwise account |
 
-> Add screenshots of your app here after building it!
+## 🔄 How It Works
 
-## Contributing
+### Payment Flow (Known App)
+1. You order food on Swiggy
+2. Payment notification: "₹350 paid to Swiggy"
+3. App detects Swiggy was in foreground → Category: "Food Delivery"
+4. AI generates: *"Evening food delivery, likely dinner"*
+5. Saved to dashboard ✅
 
-Pull requests are welcome. For major changes, please open an issue first.
+### Payment Flow (Unknown Merchant)
+1. You pay ₹50 to "Ramesh Kumar" via GPay
+2. Popup appears: "What was this for?"
+3. You select "Food → Chai/Coffee"
+4. App learns: "Ramesh Kumar" = Chai
+5. Next time → Auto-categorized! 🧠
 
-## License
+### Splitwise Integration
+1. Connect Splitwise in Settings
+2. On any transaction, tap the 💚 button
+3. Splitwise opens with amount + description pre-filled
+4. Select friends to split with
+
+## 📊 Features in Detail
+
+### Time Period Filters
+```
+┌─────────────────────────────────────────────┐
+│  [Today]  │  Week  │  Month  │  All        │
+└─────────────────────────────────────────────┘
+```
+Switch between different time periods to see:
+- **Today**: Today's transactions and spending
+- **Week**: Monday to Sunday of current week
+- **Month**: 1st of month to today
+- **All**: Complete transaction history
+
+### Category Popup
+When you receive a payment to an unknown merchant, a popup appears with:
+- Time-based suggestions (breakfast in morning, dinner in evening)
+- Quick category chips (Food, Transport, Shopping, etc.)
+- Optional note field
+- "Add to Splitwise" button
+
+### Merchant Learning
+The app remembers your categorizations:
+- First time: "Chai Wala" → You select "Food/Chai"
+- Next time: "Chai Wala" → Auto-categorized as "Food/Chai" ✅
+
+## 🤝 Contributing
+
+Pull requests are welcome! For major changes, please open an issue first.
+
+## 📄 License
 
 [MIT](LICENSE)
 
+---
+
+**Built with ❤️ using Kotlin, Jetpack Compose, and Groq AI**
