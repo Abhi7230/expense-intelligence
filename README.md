@@ -12,12 +12,15 @@ Most expense trackers make you manually log every purchase. This app does the op
 |---------|-------------|
 | 🔔 **Auto-capture payments** | Reads payment notifications from UPI apps, banking apps, and SMS in real-time |
 | 🧠 **AI-powered insights** | Uses Groq AI (Llama 3.3 70B) to generate descriptions like *"Late evening street food dinner"* |
+| 🔍 **AI payment verification** | Uses a lightweight model (Llama 3.1 8B) to filter out promos, ads, and cashback notifications |
 | 📊 **Behavioral correlation** | Tracks which apps you were using before a payment to understand context |
 | 💡 **Smart category popup** | Shows a popup when you receive a payment, letting you categorize unknown merchants |
 | 🧠 **Merchant learning** | Remembers how you categorize merchants and auto-categorizes future payments |
-| 💚 **Quick Splitwise** | One-tap button to add any expense to Splitwise |
+| 💚 **In-app Splitwise** | Full OAuth integration — select a group, pick members, preview split, and create expenses without leaving the app |
 | 📅 **Time period filters** | View transactions for Today, This Week, This Month, or All Time |
 | 🏷️ **Need vs Want** | Automatically tags transactions as necessities or discretionary spending |
+| 🔁 **Subscription detection** | Identifies recurring payments from the same merchant |
+| 🧭 **Setup Wizard** | Guided 6-step onboarding that walks you through every permission and setting |
 
 ## 📱 Screenshots
 
@@ -31,61 +34,95 @@ Most expense trackers make you manually log every purchase. This app does the op
 │  💸 Today's Spending: ₹1,250               │
 │  📊 5 transactions                          │
 ├─────────────────────────────────────────────┤
-│  🍕 Swiggy          ₹350   [Split] 12:30 PM│
-│  ☕ Chai Wala        ₹50           10:15 AM│
-│  🚕 Uber            ₹150            8:00 AM│
+│  🍕 Swiggy          ₹350   [📤] 12:30 PM  │
+│  ☕ Chai Wala        ₹50          10:15 AM  │
+│  🚕 Uber            ₹150          8:00 AM  │
 └─────────────────────────────────────────────┘
 ```
 
 ## 🏗️ Architecture
 
 ```
+First Launch → Setup Wizard (6-step guided onboarding)
+                   ↓
+      ┌────────────┴────────────┐
+      ↓                         ↓
+  Grant Permissions       Configure Settings
+  (Notif, Usage,         (Play Protect, Battery,
+   Overlay)               Restricted Settings)
+                   ↓
+           Start ForegroundService
+                   ↓
 Payment Notification → NotificationListenerService → TransactionParser
                                    ↓
                         ┌──────────┴──────────┐
                         ↓                      ↓
-              Room Database            Check Learned Merchants
-                        ↓                      ↓
-              CorrelationEngine ←──── MerchantAliasDao
-                        ↓
-            ┌───────────┴───────────┐
-            ↓                       ↓
+               AI Payment Check        Check Learned Merchants
+              (is this a real          (MerchantAliasDao)
+               payment?)                       ↓
+                        ↓               Known merchant?
+                  Room Database         ↓ Yes → Auto-categorize
+                        ↓               ↓ No  → Show Category Popup
+              CorrelationEngine                ↓
+                        ↓               User Selection
+            ┌───────────┴───────────┐          ↓
+            ↓                       ↓   Learn Merchant
     Known App?                Unknown Merchant?
-    (Zomato, Uber)            (GPay to friend)
+    (AppKnowledgeBase:         (GPay to friend)
+     Zomato, Uber, etc.)
             ↓                       ↓
-    Auto-categorize          Show Category Popup
+    Auto-categorize          Popup / AI Categorize
             ↓                       ↓
-        Groq AI ←────────── User Selection
-            ↓                       ↓
-    "Digital Memory"         Learn Merchant
-            ↓                       ↓
+        Groq AI ←────────── Category + Context
+            ↓
+    "Digital Memory"
+    (description + subcategory + need/want)
+            ↓
     ────────────────────────────────
                     ↓
          Jetpack Compose Dashboard
+         ├── Time Period Filters
+         ├── Category Spend Bar
+         ├── Top Apps by Spending
+         ├── Transaction Cards (with delete + split)
+         └── Weekly AI Insights
+
+         Splitwise Flow:
+         Transaction Card → 📤 Split → Bottom Sheet
+              ↓
+         Select Group → Select Members → Preview Split
+              ↓
+         Splitwise API (OAuth) → Expense Created ✅
 ```
 
 ### Key Components
 
 | Component | File | Purpose |
 |-----------|------|---------|
+| Setup Wizard | `SetupScreen.kt` | 6-step guided onboarding (Play Protect, permissions, battery) |
 | Notification Capture | `MyNotificationListenerService.kt` | Reads notifications, filters payments, triggers popup |
 | App Usage Tracking | `MyForegroundService.kt` | Polls `UsageStatsManager` every 5s |
-| Transaction Parser | `TransactionParser.kt` | Regex extraction of amount, merchant, mode |
-| Correlation Engine | `CorrelationEngine.kt` | Links payments to app usage sessions |
-| AI Engine | `AiInsightEngine.kt` | Groq API for natural language descriptions |
-| Category Popup | `CategoryPopupActivity.kt` | Overlay popup for manual categorization |
+| Transaction Parser | `TransactionParser.kt` | Regex extraction of amount, merchant, mode from Indian payment notifications |
+| Correlation Engine | `CorrelationEngine.kt` | Links payments to app usage sessions using a scoring algorithm |
+| App Knowledge Base | `AppKnowledgeBase.kt` | Maps 100+ Android package names → friendly name + category |
+| AI Engine | `AiInsightEngine.kt` | Groq API for descriptions + lightweight payment verification |
+| Category Popup | `CategoryPopupActivity.kt` | Overlay popup for manual categorization with time-based suggestions |
 | Time Suggestions | `TimeSuggestionEngine.kt` | Suggests categories based on time of day |
 | Merchant Learning | `MerchantAliasDao.kt` | Stores user's category preferences per merchant |
 | Subscription Detector | `SubscriptionDetector.kt` | Identifies recurring payments |
-| Insight Generator | `InsightGenerator.kt` | Aggregates summaries with time period support |
-| Dashboard UI | `MainActivity.kt` | Jetpack Compose dark-themed dashboard |
+| Insight Generator | `InsightGenerator.kt` | Aggregates summaries with time period support + weekly AI insights |
+| Splitwise Manager | `SplitwiseManager.kt` | Full OAuth login, group fetching, expense creation via Splitwise API |
+| Split Bottom Sheet | `SplitBottomSheet.kt` | In-app UI for selecting group, members, and creating a split |
+| Database | `AppDatabase.kt` | Room DB (v7) with migrations — notifications, usage, merchant aliases, subscriptions |
+| Dashboard UI | `MainActivity.kt` | Jetpack Compose dark-themed dashboard with all sections |
 
 ## 🛠️ Tech Stack
 
 - **Language**: Kotlin
-- **UI**: Jetpack Compose + Material 3
-- **Database**: Room (local SQLite)
-- **AI**: Groq API (Llama 3.3 70B) — free tier, 14,400 requests/day
+- **UI**: Jetpack Compose + Material 3 (dark theme with gradient cards)
+- **Database**: Room (local SQLite, v7 with migrations)
+- **AI**: Groq API — Llama 3.3 70B (insights) + Llama 3.1 8B (payment verification) — free tier, 14,400 requests/day
+- **Splitwise**: OAuth 2.0 + REST API for expense splitting
 - **Background**: ForegroundService + NotificationListenerService
 - **Build**: Gradle with KSP for Room annotation processing
 
@@ -124,13 +161,18 @@ Payment Notification → NotificationListenerService → TransactionParser
 
 3. **Build and run** — Open in Android Studio → Select your device → Run
 
-4. **Grant permissions** on the device:
-   - **Notification Access**: Settings → Notification Listener → Enable
-   - **Usage Access**: Settings → Usage Access → Enable
-   - **Display Over Other Apps**: Settings → Special Access → Enable *(for popup)*
-   - **Notification permission** (Android 13+): Allow when prompted
+4. **Follow the Setup Wizard** — The app launches a guided 6-step wizard on first run:
 
-5. **Start the service** — Tap Settings card → Start button
+   | Step | What It Does |
+   |------|-------------|
+   | 0. Welcome | Overview of features + privacy disclaimer |
+   | 1. Play Protect | Guides you to disable Play Protect scanning (required for sideloaded apps) |
+   | 2. App Settings | "Allow restricted settings" + set battery to "Unrestricted" |
+   | 3. Notification Access | Enable notification listener for payment capture |
+   | 4. Usage Access | Enable usage stats for app correlation |
+   | 5. All Set! | Starts the background service and opens the dashboard |
+
+   > 💡 The wizard auto-detects permission status and updates in real-time as you toggle settings.
 
 ## 🔐 Permissions
 
@@ -141,41 +183,65 @@ Payment Notification → NotificationListenerService → TransactionParser
 | `PACKAGE_USAGE_STATS` | Detect which app was open before payment |
 | `SYSTEM_ALERT_WINDOW` | Show category popup over other apps |
 | `POST_NOTIFICATIONS` | Show service notification |
-| `INTERNET` | Call Groq AI API |
+| `INTERNET` | Call Groq AI API + Splitwise API |
+| `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` | Prevent Android from killing the background service |
 
 ## ⚙️ Settings
 
-The app includes configurable settings:
+The app includes configurable settings accessible from the collapsible Settings card on the dashboard:
 
 | Setting | Options | Description |
 |---------|---------|-------------|
 | **Popup Mode** | All / Smart | Show popup for every payment or only unknown merchants |
 | **Time Filter** | Today / Week / Month / All | Filter transactions by time period |
-| **Splitwise** | Connect / Disconnect | Link your Splitwise account |
+| **Splitwise** | Connect / Disconnect | OAuth login to your Splitwise account |
+| **Background Service** | Start / Stop | Control the foreground service |
+| **Re-run Setup** | — | Re-launch the setup wizard at any time |
+| **Delete All Data** | — | Permanently erase all stored data (in Privacy & Data section) |
 
 ## 🔄 How It Works
 
 ### Payment Flow (Known App)
 1. You order food on Swiggy
 2. Payment notification: "₹350 paid to Swiggy"
-3. App detects Swiggy was in foreground → Category: "Food Delivery"
-4. AI generates: *"Evening food delivery, likely dinner"*
-5. Saved to dashboard ✅
+3. AI verifies it's a real payment (not a promo)
+4. App detects Swiggy was in foreground → Category: "Food Delivery"
+5. AI generates: *"Evening food delivery, likely dinner"* + tags it as "Want"
+6. Saved to dashboard ✅
 
 ### Payment Flow (Unknown Merchant)
 1. You pay ₹50 to "Ramesh Kumar" via GPay
 2. Popup appears: "What was this for?"
-3. You select "Food → Chai/Coffee"
-4. App learns: "Ramesh Kumar" = Chai
-5. Next time → Auto-categorized! 🧠
+3. Time-based suggestions appear (e.g., breakfast in morning, dinner at night)
+4. You select "Food → Chai/Coffee"
+5. App learns: "Ramesh Kumar" = Chai
+6. Next time → Auto-categorized! 🧠
 
 ### Splitwise Integration
-1. Connect Splitwise in Settings
-2. On any transaction, tap the 💚 button
-3. Splitwise opens with amount + description pre-filled
-4. Select friends to split with
+1. Connect Splitwise via OAuth in Settings
+2. On any transaction, tap the 📤 button
+3. Bottom sheet opens: select a group → pick members to split with
+4. Preview shows per-person amount
+5. Tap "Split It!" → expense created directly in Splitwise via API
+
+### AI Payment Verification
+Not every notification with a ₹ sign is a real payment. The app uses a lightweight AI model to filter:
+- ✅ "₹183 paid to Uber India" → Real payment → **KEEP**
+- ❌ "Get ₹201 off on purchase" → Promo → **SKIP**
+- ❌ "₹500 credited to your account" → Income → **SKIP**
 
 ## 📊 Features in Detail
+
+### Setup Wizard
+On first launch, a 6-step animated wizard guides you through:
+1. **Welcome** — Feature overview + detailed privacy disclaimer
+2. **Play Protect** — Disable scanning (otherwise permissions get silently revoked)
+3. **App Settings** — Allow restricted settings + unrestricted battery
+4. **Notification Access** — With troubleshooting tips if toggle is greyed out
+5. **Usage Access** — With explanation of why it's needed
+6. **All Set!** — Auto-starts the background service
+
+Each step has real-time permission status badges that update as you return from settings.
 
 ### Time Period Filters
 ```
@@ -200,6 +266,32 @@ When you receive a payment to an unknown merchant, a popup appears with:
 The app remembers your categorizations:
 - First time: "Chai Wala" → You select "Food/Chai"
 - Next time: "Chai Wala" → Auto-categorized as "Food/Chai" ✅
+
+### App Knowledge Base
+100+ Indian apps pre-mapped with friendly names and categories:
+- Food Delivery: Zomato, Swiggy, Dominos, etc.
+- Transport: Uber, Ola, Rapido, Namma Yatri
+- Shopping: Amazon, Flipkart, Myntra, Meesho
+- Payment: GPay, PhonePe, Paytm, BHIM
+- And more: Travel, Groceries, Healthcare, Entertainment, Finance, Recharge
+
+### Top Spending Apps
+A ranked leaderboard card showing which apps you spend the most through, with:
+- Gold/Silver/Bronze medal emojis for top 3
+- Transaction count per app
+- Proportional spending bars
+
+### Spending Breakdown Bar
+A visual proportional bar showing category-wise spend distribution with color-coded legends.
+
+## 🔒 Privacy
+
+- 📱 All data stored locally on YOUR phone — Room database, no cloud
+- 🚫 We NEVER collect, store, or share your personal or financial data
+- 🤖 The only internet calls are to Groq AI (brief text summaries) and Splitwise API (if you connect it)
+- 🔔 Notification access reads ONLY payment notifications — not personal messages
+- 🗑️ Uninstall the app = ALL data permanently deleted
+- 🔑 No accounts, no login (except optional Splitwise), no tracking, no analytics
 
 ## 🤝 Contributing
 
