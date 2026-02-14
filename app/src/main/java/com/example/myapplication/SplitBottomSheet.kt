@@ -276,7 +276,7 @@ fun SplitBottomSheet(
                         isCreating = true
                         errorMessage = null
 
-                        val success = SplitwiseManager.createExpense(
+                        val result = SplitwiseManager.createExpense(
                             context = context,
                             description = description.ifBlank { merchant },
                             amount = amount,
@@ -287,11 +287,13 @@ fun SplitBottomSheet(
 
                         isCreating = false
 
-                        if (success) {
-                            Toast.makeText(context, "✅ Added to Splitwise!", Toast.LENGTH_SHORT).show()
+                        if (result.success) {
+                            Toast.makeText(context, "✅ Added to Splitwise! ID: ${result.expenseId}", Toast.LENGTH_LONG).show()
                             onSplitCreated()
                         } else {
-                            errorMessage = "Failed to create expense. Try again."
+                            // Show the actual error - full raw response for debugging
+                            val debugMsg = "UserID: $currentUserId | Group: ${selectedGroup!!.id} | Error: ${result.rawResponse ?: result.errorMessage}"
+                            errorMessage = debugMsg
                         }
                     }
                 },

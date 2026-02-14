@@ -179,14 +179,20 @@ class MyNotificationListenerService : NotificationListenerService() {
                     val savedEntity = db.notificationDao().getById(insertedId.toInt())
 
                     if (savedEntity != null) {
-                        // ── NEW: Check if merchant is already learned ──
+                        // ── Check popup settings FIRST ──
+                        val prefs = applicationContext.getSharedPreferences("expense_intelligence_prefs", android.content.Context.MODE_PRIVATE)
+                        val popupMode = prefs.getString("popup_mode", "smart") ?: "smart"
+                        
+                        // ── Check if merchant is already learned ──
                         val normalizedMerchant = (parsed.merchant ?: "").lowercase().trim()
                         val learnedAlias = if (normalizedMerchant.isNotBlank()) {
                             db.merchantAliasDao().findByName(normalizedMerchant)
                         } else null
 
-                        if (learnedAlias != null) {
-                            // Auto-apply learned category — skip correlation!
+                        // Only auto-categorize if popup is OFF (smart mode)
+                        // If popup is ON (all mode), always show popup even for learned merchants
+                        if (learnedAlias != null && popupMode != "all") {
+                            // Auto-apply learned category — skip popup!
                             Log.d(TAG, "🧠 Using learned category for '$normalizedMerchant': ${learnedAlias.category}")
                             val finalCategory = learnedAlias.subcategory ?: learnedAlias.category
                             db.notificationDao().updateCorrelation(
@@ -231,10 +237,6 @@ class MyNotificationListenerService : NotificationListenerService() {
                         }
 
                         val result = CorrelationEngine.correlate(savedEntity, recentUsages)
-
-                        // ── Check popup settings ──
-                        val prefs = applicationContext.getSharedPreferences("expense_intelligence_prefs", android.content.Context.MODE_PRIVATE)
-                        val popupMode = prefs.getString("popup_mode", "smart") ?: "smart"
                         
                         // Determine if we should show popup
                         // Include "Unknown" category and our own app being in foreground (user was in our app)

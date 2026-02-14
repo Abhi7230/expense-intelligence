@@ -1,7 +1,5 @@
 package com.example.myapplication
 
-import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -10,9 +8,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -25,6 +25,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 import kotlin.concurrent.thread
 
 /**
@@ -303,86 +304,173 @@ fun CategoryPopupScreen(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // ── SPLITWISE BUTTON ──
+                // ── SPLITWISE INTEGRATION ──
                 val context = LocalContext.current
-                Button(
-                    onClick = {
-                        // First save the category if selected
-                        selectedSuggestion?.let {
-                            onCategorySaved(
-                                it.category,
-                                it.subcategory,
-                                userNote.ifBlank { null }
-                            )
-                        }
-                        
-                        // Open Splitwise app with pre-filled data
-                        val description = if (userNote.isNotBlank()) {
-                            "$merchant - $userNote"
-                        } else if (selectedSuggestion != null) {
-                            "$merchant (${selectedSuggestion!!.subcategory})"
-                        } else {
-                            merchant
-                        }
-                        
-                        // Try to open Splitwise app directly
-                        try {
-                            val splitwiseIntent = Intent(Intent.ACTION_VIEW).apply {
-                                data = Uri.parse("splitwise://addexpense")
-                                putExtra("cost", amount)
-                                putExtra("description", description)
-                            }
-                            
-                            // Check if Splitwise is installed
-                            val packageManager = context.packageManager
-                            val splitwisePackage = "com.Splitwise.SplitwiseMobile"
-                            
-                            try {
-                                packageManager.getPackageInfo(splitwisePackage, 0)
-                                // Splitwise is installed - open it
-                                val launchIntent = packageManager.getLaunchIntentForPackage(splitwisePackage)
-                                if (launchIntent != null) {
-                                    context.startActivity(launchIntent)
-                                    Toast.makeText(
-                                        context,
-                                        "📋 Add expense: ₹$amount for $description",
-                                        Toast.LENGTH_LONG
-                                    ).show()
+                val scope = rememberCoroutineScope()
+                val isSplitwiseLoggedIn = remember { SplitwiseManager.isLoggedIn(context) }
+                var showSplitOptions by remember { mutableStateOf(false) }
+                var groups by remember { mutableStateOf<List<SplitwiseManager.SplitwiseGroup>>(emptyList()) }
+                var selectedGroup by remember { mutableStateOf<SplitwiseManager.SplitwiseGroup?>(null) }
+                var selectedMembers by remember { mutableStateOf<Set<Long>>(emptySet()) }
+                var isLoadingGroups by remember { mutableStateOf(false) }
+                var isCreatingExpense by remember { mutableStateOf(false) }
+                val currentUserId = remember { SplitwiseManager.getCurrentUserId(context) }
+
+                if (isSplitwiseLoggedIn) {
+                    if (!showSplitOptions) {
+                        // Show "Add to Splitwise" button
+                        Button(
+                            onClick = {
+                                showSplitOptions = true
+                                isLoadingGroups = true
+                                scope.launch {
+                                    groups = SplitwiseManager.getGroups(context)
+                                    isLoadingGroups = false
                                 }
-                            } catch (e: Exception) {
-                                // Splitwise not installed - open Play Store
-                                val playStoreIntent = Intent(Intent.ACTION_VIEW).apply {
-                                    data = Uri.parse("https://play.google.com/store/apps/details?id=$splitwisePackage")
-                                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                                }
-                                context.startActivity(playStoreIntent)
-                                Toast.makeText(context, "Install Splitwise to split expenses!", Toast.LENGTH_SHORT).show()
-                            }
-                        } catch (e: Exception) {
-                            Toast.makeText(context, "Could not open Splitwise", Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = SplitwiseGreen),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text("💚 Add to Splitwise", color = Color.White, fontWeight = FontWeight.Bold)
                         }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = SplitwiseGreen
-                    ),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Row(
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
+                    } else {
+                        // Show group & member selection inline
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(containerColor = SurfaceCard),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text("Split with:", color = TextSecondary, fontSize = 12.sp)
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                if (isLoadingGroups) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(24.dp).align(Alignment.CenterHorizontally),
+                                        color = SplitwiseGreen
+                                    )
+                                } else if (groups.isEmpty()) {
+                                    Text("No groups found", color = TextMuted, fontSize = 13.sp)
+                                } else {
+                                    // Group chips
+                                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        items(groups) { group ->
+                                            Box(
+                                                modifier = Modifier
+                                                    .clip(RoundedCornerShape(8.dp))
+                                                    .background(if (selectedGroup?.id == group.id) SplitwiseGreen else SurfaceDark)
+                                                    .clickable {
+                                                        selectedGroup = group
+                                                        selectedMembers = emptySet()
+                                                    }
+                                                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                                            ) {
+                                                Text(
+                                                    group.name,
+                                                    color = if (selectedGroup?.id == group.id) Color.White else TextPrimary,
+                                                    fontSize = 12.sp
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    // Member chips (if group selected)
+                                    if (selectedGroup != null) {
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        val otherMembers = selectedGroup!!.members.filter { it.id != currentUserId }
+                                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                            items(otherMembers) { member ->
+                                                val isSelected = member.id in selectedMembers
+                                                Box(
+                                                    modifier = Modifier
+                                                        .clip(RoundedCornerShape(16.dp))
+                                                        .background(if (isSelected) SplitwiseGreen else SurfaceDark)
+                                                        .clickable {
+                                                            selectedMembers = if (isSelected) selectedMembers - member.id else selectedMembers + member.id
+                                                        }
+                                                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                                                ) {
+                                                    Text(
+                                                        member.displayName,
+                                                        color = if (isSelected) Color.White else TextSecondary,
+                                                        fontSize = 11.sp
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Split It button
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    isCreatingExpense = true
+                                    // Save category first
+                                    selectedSuggestion?.let {
+                                        onCategorySaved(it.category, it.subcategory, userNote.ifBlank { null })
+                                    }
+                                    
+                                    val description = if (userNote.isNotBlank()) {
+                                        "$merchant - $userNote"
+                                    } else if (selectedSuggestion != null) {
+                                        "$merchant (${selectedSuggestion!!.subcategory})"
+                                    } else {
+                                        merchant
+                                    }
+                                    
+                                    val amountDouble = amount.replace(",", "").toDoubleOrNull() ?: 0.0
+                                    val result = SplitwiseManager.createExpense(
+                                        context = context,
+                                        description = description,
+                                        amount = amountDouble,
+                                        groupId = selectedGroup!!.id,
+                                        splitWithIds = selectedMembers.toList(),
+                                        paidByUserId = currentUserId
+                                    )
+                                    
+                                    isCreatingExpense = false
+                                    
+                                    if (result.success) {
+                                        Toast.makeText(context, "✅ Added to Splitwise!", Toast.LENGTH_SHORT).show()
+                                        onDismiss()
+                                    } else {
+                                        Toast.makeText(context, "❌ ${result.errorMessage}", Toast.LENGTH_LONG).show()
+                                    }
+                                }
+                            },
+                            enabled = selectedGroup != null && selectedMembers.isNotEmpty() && !isCreatingExpense,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = SplitwiseGreen,
+                                disabledContainerColor = SurfaceCard
+                            ),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            if (isCreatingExpense) {
+                                CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
+                            } else {
+                                Text(
+                                    "Split It!",
+                                    color = if (selectedGroup != null && selectedMembers.isNotEmpty()) Color.White else TextMuted,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    // Not logged in - show connect button
+                    OutlinedButton(
+                        onClick = { SplitwiseManager.startLogin(context) },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
                     ) {
-                        Text(
-                            "💚",
-                            fontSize = 18.sp
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            "Add to Splitwise",
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp
-                        )
+                        Text("🔗 Connect Splitwise", color = TextSecondary)
                     }
                 }
 

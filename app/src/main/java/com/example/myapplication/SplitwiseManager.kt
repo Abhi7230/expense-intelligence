@@ -294,6 +294,14 @@ object SplitwiseManager {
         }
     }
 
+    // Result class to pass back detailed info
+    data class CreateExpenseResult(
+        val success: Boolean,
+        val expenseId: Long? = null,
+        val errorMessage: String? = null,
+        val rawResponse: String? = null
+    )
+
     /**
      * Create an expense in Splitwise.
      *
@@ -310,69 +318,92 @@ object SplitwiseManager {
         groupId: Long,
         splitWithIds: List<Long>,
         paidByUserId: Long
-    ): Boolean = withContext(Dispatchers.IO) {
-        val accessToken = getAccessToken(context) ?: return@withContext false
+    ): CreateExpenseResult = withContext(Dispatchers.IO) {
+        val accessToken = getAccessToken(context) 
+            ?: return@withContext CreateExpenseResult(false, errorMessage = "Not logged in")
 
         try {
             val url = URL("$API_BASE/create_expense")
             val connection = url.openConnection() as HttpURLConnection
             connection.requestMethod = "POST"
             connection.setRequestProperty("Authorization", "Bearer $accessToken")
-            connection.setRequestProperty("Content-Type", "application/json")
+            connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
             connection.doOutput = true
             connection.connectTimeout = 15000
             connection.readTimeout = 15000
 
-            // Calculate equal split
+            // Calculate equal split with proper rounding
             val totalPeople = splitWithIds.size + 1  // including the payer
-            val sharePerPerson = amount / totalPeople
+            val baseShare = Math.floor(amount * 100 / totalPeople) / 100  // Round down to 2 decimals
+            val totalBaseShares = baseShare * totalPeople
+            val remainder = amount - totalBaseShares  // Give remainder to first person
+            val firstPersonShare = baseShare + remainder
 
-            // Build users array with shares
-            val usersArray = JSONArray()
+            // Build form-encoded body (Splitwise requires this format!)
+            val params = mutableListOf<String>()
+            params.add("cost=${String.format("%.2f", amount)}")
+            params.add("description=${java.net.URLEncoder.encode(description, "UTF-8")}")
+            params.add("group_id=$groupId")
+            params.add("currency_code=INR")
+            
+            // User 0: the payer (paid full amount, owes their share - gets the remainder)
+            params.add("users__0__user_id=$paidByUserId")
+            params.add("users__0__paid_share=${String.format("%.2f", amount)}")
+            params.add("users__0__owed_share=${String.format("%.2f", firstPersonShare)}")
 
-            // Payer's share (paid full amount, owes their portion)
-            usersArray.put(JSONObject().apply {
-                put("user_id", paidByUserId)
-                put("paid_share", String.format("%.2f", amount))
-                put("owed_share", String.format("%.2f", sharePerPerson))
-            })
-
-            // Others' shares (paid nothing, owe their portion)
-            splitWithIds.forEach { memberId ->
-                usersArray.put(JSONObject().apply {
-                    put("user_id", memberId)
-                    put("paid_share", "0.00")
-                    put("owed_share", String.format("%.2f", sharePerPerson))
-                })
+            // Users 1..N: others (paid nothing, owe base share)
+            splitWithIds.forEachIndexed { index, memberId ->
+                val i = index + 1
+                params.add("users__${i}__user_id=$memberId")
+                params.add("users__${i}__paid_share=0.00")
+                params.add("users__${i}__owed_share=${String.format("%.2f", baseShare)}")
             }
 
-            val body = JSONObject().apply {
-                put("cost", String.format("%.2f", amount))
-                put("description", description)
-                put("group_id", groupId)
-                put("currency_code", "INR")
-                put("split_equally", false)
-                put("users", usersArray)
-            }
+            val body = params.joinToString("&")
 
             Log.d(TAG, "📤 Creating expense: $body")
 
-            OutputStreamWriter(connection.outputStream).use { it.write(body.toString()) }
+            OutputStreamWriter(connection.outputStream).use { it.write(body) }
 
             val responseCode = connection.responseCode
-            val success = responseCode in 200..299
-
-            if (success) {
-                Log.d(TAG, "✅ Expense created in Splitwise!")
+            
+            // Read response body (for both success and error)
+            val responseBody = if (responseCode in 200..299) {
+                connection.inputStream.bufferedReader().readText()
             } else {
-                val error = connection.errorStream?.bufferedReader()?.readText() ?: "Unknown"
-                Log.e(TAG, "❌ Create expense failed: $responseCode — $error")
+                connection.errorStream?.bufferedReader()?.readText() ?: "No error body"
             }
-
-            success
+            
+            Log.d(TAG, "📥 Response ($responseCode): $responseBody")
+            
+            // Parse response - Splitwise returns {"expenses": [...], "errors": {...}}
+            val responseJson = try { JSONObject(responseBody) } catch (e: Exception) { null }
+            
+            // Check if expenses array has items (that's the real success indicator)
+            val expensesArray = responseJson?.optJSONArray("expenses")
+            val expenseCreated = expensesArray != null && expensesArray.length() > 0
+            
+            // Check for errors object
+            val errorsObj = responseJson?.optJSONObject("errors")
+            val hasErrors = errorsObj != null && errorsObj.length() > 0
+            
+            if (hasErrors) {
+                Log.e(TAG, "❌ Splitwise errors: $errorsObj")
+            }
+            
+            if (expenseCreated) {
+                val createdExpense = expensesArray!!.getJSONObject(0)
+                val expenseId = createdExpense.optLong("id")
+                Log.d(TAG, "✅ Expense created! ID: $expenseId")
+                CreateExpenseResult(true, expenseId = expenseId, rawResponse = responseBody)
+            } else {
+                val errorMsg = errorsObj?.toString() ?: "No expense created"
+                Log.e(TAG, "❌ No expense created. Response: $responseBody")
+                CreateExpenseResult(false, errorMessage = errorMsg, rawResponse = responseBody)
+            }
         } catch (e: Exception) {
             Log.e(TAG, "❌ Error creating expense: ${e.message}")
-            false
+            CreateExpenseResult(false, errorMessage = e.message ?: "Unknown error")
         }
     }
 
