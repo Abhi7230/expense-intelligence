@@ -2,6 +2,11 @@
 
 **AI-powered personal expense tracker for Android** that automatically detects payments from your phone's notifications, categorizes them intelligently, and lets you split expenses with friends — all running locally on your device.
 
+## 🎬 Videos
+
+- **2‑min demo (how the app works)**: [Watch on YouTube](https://www.youtube.com/watch?v=Mx7RDRSpQz0)
+- **Full setup walkthrough**: [Watch on YouTube](https://www.youtube.com/watch?v=4zbtp5sRyE0)
+
 ## ✨ What It Does
 
 Most expense trackers make you manually log every purchase. This app does the opposite — it **listens to your phone's notifications** (GPay, PhonePe, bank SMS, etc.), automatically extracts transaction details, and uses AI to understand **what you bought, when, and why**.
@@ -135,6 +140,8 @@ Payment Notification → NotificationListenerService → TransactionParser
 - *(Optional)* [Splitwise app credentials](https://secure.splitwise.com/apps) for expense splitting
 
 ### Steps
+
+> Prefer video? Follow the **full setup walkthrough** here: [Watch on YouTube](https://www.youtube.com/watch?v=4zbtp5sRyE0)
 
 1. **Clone the repo**
    ```bash
